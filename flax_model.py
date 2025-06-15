@@ -36,6 +36,7 @@ class DynamicsNetwork(fnn.Module):
     num_agents: int
     hidden_state_size: int
     action_space_size: int
+    reward_support_size: int
     fc_dynamic_layers: List[int]
     fc_reward_layers: List[int]
     
@@ -54,16 +55,19 @@ class DynamicsNetwork(fnn.Module):
         reward_input = jnp.concatenate([next_latent_states, actions_onehot], axis=-1)
         flat_reward_input = reward_input.reshape(batch_size, -1)
 
-        reward_net = MLP(layer_sizes=self.fc_reward_layers, output_size=1)
-        reward = reward_net(flat_reward_input)
+        reward_output_size = self.reward_support_size * 2 + 1
+        reward_net = MLP(layer_sizes=self.fc_reward_layers, output_size=reward_output_size)
+        reward_logits = reward_net(flat_reward_input)
         
-        return next_latent_states, reward
+        return next_latent_states, reward_logits
+
 
 class PredictionNetwork(fnn.Module):
     """Predicts the policy for each agent and the centralized value."""
     num_agents: int
     hidden_state_size: int
     action_space_size: int
+    value_support_size: int
     fc_value_layers: List[int]
     fc_policy_layers: List[int]
 
@@ -72,14 +76,15 @@ class PredictionNetwork(fnn.Module):
         batch_size, num_agents, _ = hidden_states.shape
 
         flat_hidden_states = hidden_states.reshape(batch_size, -1)
-        value_net = MLP(layer_sizes=self.fc_value_layers, output_size=1)
-        value = value_net(flat_hidden_states)
+        value_output_size = self.value_support_size * 2 + 1
+        value_net = MLP(layer_sizes=self.fc_value_layers, output_size=value_output_size)
+        value_logits = value_net(flat_hidden_states)
 
         flat_agent_states = hidden_states.reshape(batch_size * num_agents, -1)
         policy_net = MLP(layer_sizes=self.fc_policy_layers, output_size=self.action_space_size)
         policy_logits = policy_net(flat_agent_states).reshape(batch_size, num_agents, -1)
         
-        return policy_logits, value
+        return policy_logits, value_logits
 
 
 class FlaxMAMuZeroNet(fnn.Module):
@@ -87,6 +92,8 @@ class FlaxMAMuZeroNet(fnn.Module):
     num_agents: int
     action_space_size: int
     hidden_state_size: int
+    value_support_size: int
+    reward_support_size: int
     fc_representation_layers: List[int]
     fc_dynamic_layers: List[int]
     fc_reward_layers: List[int]
@@ -103,6 +110,7 @@ class FlaxMAMuZeroNet(fnn.Module):
             num_agents=self.num_agents,
             hidden_state_size=self.hidden_state_size,
             action_space_size=self.action_space_size,
+            reward_support_size=self.reward_support_size,
             fc_dynamic_layers=self.fc_dynamic_layers,
             fc_reward_layers=self.fc_reward_layers
         )
@@ -110,6 +118,7 @@ class FlaxMAMuZeroNet(fnn.Module):
             num_agents=self.num_agents,
             hidden_state_size=self.hidden_state_size,
             action_space_size=self.action_space_size,
+            value_support_size=self.value_support_size,
             fc_value_layers=self.fc_value_layers,
             fc_policy_layers=self.fc_policy_layers
         )
@@ -118,16 +127,13 @@ class FlaxMAMuZeroNet(fnn.Module):
         """Performs the initial inference from a batch of observations."""
         batch_size = observations.shape[0]
         
-        # Reshape for per-agent processing
         flat_obs = observations.reshape(batch_size * self.num_agents, -1)
         hidden_states = self.representation_net(flat_obs).reshape(batch_size, self.num_agents, -1)
         
         policy_logits, value = self.prediction_net(hidden_states)
-        
-        # Initial reward is always zero
         reward = jnp.zeros_like(value)
 
-        if self.is_mutable_collection('params'):
+        if self.is_mutable_collection('params'): # Initialize params for dynamics
             dummy_actions = jnp.zeros((batch_size, self.num_agents), dtype=jnp.int32)
             self.recurrent_inference(hidden_states, dummy_actions)
 
@@ -142,3 +148,8 @@ class FlaxMAMuZeroNet(fnn.Module):
         next_policy_logits, next_value = self.prediction_net(next_hidden_states)
         
         return next_hidden_states, reward, next_policy_logits, next_value
+    
+    def predict(self, hidden_states: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Runs the prediction network from a latent state."""
+        policy_logits, value = self.prediction_net(hidden_states)
+        return policy_logits, value
