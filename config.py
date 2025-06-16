@@ -1,6 +1,6 @@
-HYPERPARAMS = { "planner_mode": "independent",
+HYPERPARAMS = { "planner_mode": "joint",  # "independent" or "joint"
                "num_episodes": 100000,
-               "warmup_episodes": 10000,
+               "warmup_episodes": 1000,
                "log_interval": 100,
                "num_actors": 6, 
                "num_agents": 3,

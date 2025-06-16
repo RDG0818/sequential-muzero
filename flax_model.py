@@ -3,10 +3,10 @@
 import flax.linen as fnn
 import jax
 import jax.numpy as jnp
-from typing import List, Tuple
+from typing import Tuple
 
 class MLP(fnn.Module):
-    layer_sizes: List[int]
+    layer_sizes: Tuple[int, ...]
     output_size: int
 
     @fnn.compact
@@ -23,7 +23,7 @@ class MLP(fnn.Module):
 class RepresentationNetwork(fnn.Module):
     """Encodes a local observation into a latent state for a single agent."""
     hidden_state_size: int
-    fc_layers: List[int]
+    fc_layers: Tuple[int, ...]
 
     @fnn.compact
     def __call__(self, observation: jnp.ndarray) -> jnp.ndarray:
@@ -38,8 +38,8 @@ class DynamicsNetwork(fnn.Module):
     hidden_state_size: int
     action_space_size: int
     reward_support_size: int
-    fc_dynamic_layers: List[int]
-    fc_reward_layers: List[int]
+    fc_dynamic_layers: Tuple[int, ...]
+    fc_reward_layers: Tuple[int, ...]
     
     @fnn.compact
     def __call__(self, hidden_states: jnp.ndarray, actions_onehot: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -69,8 +69,8 @@ class PredictionNetwork(fnn.Module):
     hidden_state_size: int
     action_space_size: int
     value_support_size: int
-    fc_value_layers: List[int]
-    fc_policy_layers: List[int]
+    fc_value_layers: Tuple[int, ...]
+    fc_policy_layers: Tuple[int, ...]
 
     @fnn.compact
     def __call__(self, hidden_states: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -95,11 +95,11 @@ class FlaxMAMuZeroNet(fnn.Module):
     hidden_state_size: int
     value_support_size: int
     reward_support_size: int
-    fc_representation_layers: List[int]
-    fc_dynamic_layers: List[int]
-    fc_reward_layers: List[int]
-    fc_value_layers: List[int]
-    fc_policy_layers: List[int]
+    fc_representation_layers: Tuple[int, ...]
+    fc_dynamic_layers: Tuple[int, ...]
+    fc_reward_layers: Tuple[int, ...]
+    fc_value_layers: Tuple[int, ...]
+    fc_policy_layers: Tuple[int, ...]
 
     def setup(self):
         """Create the sub-networks. This is called once by Flax."""

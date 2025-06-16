@@ -1,0 +1,6 @@
+jax
+jaxlib
+flax
+ray
+optax
+mpe2

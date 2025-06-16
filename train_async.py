@@ -78,6 +78,7 @@ class DataActor:
         
         import jax
         from mcts import MCTSPlanner
+        from mcts_joint import MCTSJointPlanner
         from utils import DiscreteSupport
         from train import MPEEnvWrapper, process_episode
         from flax_model import FlaxMAMuZeroNet
@@ -93,7 +94,9 @@ class DataActor:
         model_kwargs['action_space_size'] = self.env_wrapper.action_space_size
         model = FlaxMAMuZeroNet(num_agents=HYPERPARAMS["num_agents"], **model_kwargs)
         
-        planner = MCTSPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], mode=HYPERPARAMS["planner_mode"], num_joint_samples=HYPERPARAMS["num_joint_samples"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
+        if HYPERPARAMS["planner_mode"] == "independent": planner = MCTSPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], mode=HYPERPARAMS["planner_mode"], num_joint_samples=HYPERPARAMS["num_joint_samples"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
+        elif HYPERPARAMS["planner_mode"] == "joint": planner = MCTSJointPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
+        else: raise ValueError(f"Invalid planner mode: {HYPERPARAMS['planner_mode']}") 
         self.plan_fn = jax.jit(planner.plan)
 
         self.value_support = DiscreteSupport(min=-HYPERPARAMS["value_support_size"], max=HYPERPARAMS["value_support_size"])
