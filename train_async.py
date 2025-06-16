@@ -8,13 +8,10 @@ import os
 
 from config import HYPERPARAMS
 
-# No JAX imports in the driver script
-
 @ray.remote
 class ReplayBufferActor:
     """Actor for the replay buffer. Safe from JAX issues."""
     def __init__(self):
-        # This part is fine
         from replay_buffer import ReplayBuffer
         self.replay_buffer = ReplayBuffer(HYPERPARAMS["replay_buffer_size"])
     
@@ -32,7 +29,6 @@ class ReplayBufferActor:
 class LearnerActor:
     """Learner actor that lives on the GPU."""
     def __init__(self, replay_buffer_actor):
-        # All imports are local to this actor's process, after it's on the GPU.
         import jax
         import optax
         from flax_model import FlaxMAMuZeroNet
@@ -59,15 +55,11 @@ class LearnerActor:
 
     def train(self):
         import jax
-        from replay_buffer import ReplayItem # needed for type casting
 
-        # 1. Get a batch of NumPy arrays from the replay buffer
         numpy_batch = ray.get(self.replay_buffer.sample.remote(HYPERPARAMS["batch_size"]))
         
-        # 2. THE FIX: Convert the NumPy batch to a JAX batch before training
         jax_batch = jax.tree_util.tree_map(lambda x: jax.device_put(x), numpy_batch)
-        
-        # 3. Train on the JAX batch
+
         self.params, self.opt_state, loss = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch)
         self.train_step_count += 1
         return loss.item()
@@ -84,7 +76,6 @@ class DataActor:
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
         os.environ['JAX_PLATFORMS'] = 'cpu' # This is the key fix
         
-        # All imports are local to this new process
         import jax
         from mcts import MCTSPlanner
         from utils import DiscreteSupport

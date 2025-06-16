@@ -11,11 +11,12 @@ class MLP(fnn.Module):
 
     @fnn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        x = x.astype(jnp.bfloat16) 
         for size in self.layer_sizes:
-            x = fnn.Dense(features=size)(x)
+            x = fnn.Dense(features=size, dtype=jnp.bfloat16)(x)
             x = fnn.LayerNorm()(x)
             x = fnn.relu(x)
-        x = fnn.Dense(features=self.output_size)(x)
+        x = fnn.Dense(features=self.output_size, dtype=jnp.float32)(x)
         return x
 
 
