@@ -140,7 +140,7 @@ class MCTSJointPlanner:
         # Action is a scalar index for the chosen joint action
         chosen_joint_action_index = policy_output.action
         joint_action_tuple = jnp.unravel_index(chosen_joint_action_index, self.joint_action_shape)
-        final_joint_action = jnp.array(joint_action_tuple)
+        final_joint_action = jnp.array(joint_action_tuple).squeeze(axis=-1)
 
         # Action weights are the visit counts for the joint actions
         joint_policy_target = policy_output.action_weights
