@@ -56,11 +56,13 @@ class LearnerActor:
     def train(self):
         import jax
 
+        self.rng_key, train_key = jax.random.split(self.rng_key)
+
         numpy_batch = ray.get(self.replay_buffer.sample.remote(HYPERPARAMS["batch_size"]))
         
         jax_batch = jax.tree_util.tree_map(lambda x: jax.device_put(x), numpy_batch)
 
-        self.params, self.opt_state, loss = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch)
+        self.params, self.opt_state, loss = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch, train_key)
         self.train_step_count += 1
         return loss.item()
         
@@ -79,6 +81,7 @@ class DataActor:
         import jax
         from mcts import MCTSPlanner
         from mcts_joint import MCTSJointPlanner
+        from mcts_sequential import MCTSSequentialPlanner
         from utils import DiscreteSupport
         from train import MPEEnvWrapper, process_episode
         from flax_model import FlaxMAMuZeroNet
@@ -94,8 +97,9 @@ class DataActor:
         model_kwargs['action_space_size'] = self.env_wrapper.action_space_size
         model = FlaxMAMuZeroNet(num_agents=HYPERPARAMS["num_agents"], **model_kwargs)
         
-        if HYPERPARAMS["planner_mode"] == "independent": planner = MCTSPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], mode=HYPERPARAMS["planner_mode"], num_joint_samples=HYPERPARAMS["num_joint_samples"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
+        if HYPERPARAMS["planner_mode"] == "independent": planner = MCTSPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
         elif HYPERPARAMS["planner_mode"] == "joint": planner = MCTSJointPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
+        elif HYPERPARAMS["planner_mode"] == "sequential": planner = MCTSSequentialPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
         else: raise ValueError(f"Invalid planner mode: {HYPERPARAMS['planner_mode']}") 
         self.plan_fn = jax.jit(planner.plan)
 

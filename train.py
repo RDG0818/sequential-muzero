@@ -61,12 +61,16 @@ class MPEEnvWrapper:
         return np.stack(obs_list, axis=0)[np.newaxis, ...]
 
 
-def train_step(model, optimizer, params, opt_state, batch):
+def train_step(model, optimizer, params, opt_state, batch, rng_key):
+    loss_rng, new_train_rng = jax.random.split(rng_key)
     def loss_fn(p):
         total_loss = 0.0
+        dropout_rng, initial_rng, unroll_rng = jax.random.split(loss_rng, 3)
+        unroll_keys = jax.random.split(unroll_rng, HYPERPARAMS["unroll_steps"])
         # MuZero-style unrolled loss calculation
         hidden, _, p0_logits, v0_logits = model.apply(
-            {'params': p}, batch.observation
+            {'params': p}, batch.observation,
+            rngs={'dropout': initial_rng}
         )
 
         policy_loss = optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0, :, :]).mean()
@@ -83,7 +87,8 @@ def train_step(model, optimizer, params, opt_state, batch):
                 {'params': p},
                 hidden,     # previous latent
                 ai,         # this step’s joint action
-                method=model.recurrent_inference
+                method=model.recurrent_inference,
+                rngs={'dropout': unroll_keys[i]}
             )
 
             reward_loss = optax.softmax_cross_entropy(ri_logits, batch.reward_target[:, i, :]).mean()

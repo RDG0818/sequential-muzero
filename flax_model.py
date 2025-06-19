@@ -3,21 +3,8 @@
 import flax.linen as fnn
 import jax
 import jax.numpy as jnp
+from attention import MLP, AttentionEncoder
 from typing import Tuple
-
-class MLP(fnn.Module):
-    layer_sizes: Tuple[int, ...]
-    output_size: int
-
-    @fnn.compact
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        x = x.astype(jnp.bfloat16) 
-        for size in self.layer_sizes:
-            x = fnn.Dense(features=size, dtype=jnp.bfloat16)(x)
-            x = fnn.LayerNorm()(x)
-            x = fnn.relu(x)
-        x = fnn.Dense(features=self.output_size, dtype=jnp.float32)(x)
-        return x
 
 
 class RepresentationNetwork(fnn.Module):
@@ -33,25 +20,42 @@ class RepresentationNetwork(fnn.Module):
 
 
 class DynamicsNetwork(fnn.Module):
-    """Predicts the next latent state and the joint reward."""
+    """
+    Predicts the next latent state and the joint reward using attention.
+    """
     num_agents: int
     hidden_state_size: int
     action_space_size: int
     reward_support_size: int
     fc_dynamic_layers: Tuple[int, ...]
     fc_reward_layers: Tuple[int, ...]
-    
+
+    # Attention-specific hyperparameters
+    attention_layers: int = 3
+    attention_heads: int = 4
+
     @fnn.compact
     def __call__(self, hidden_states: jnp.ndarray, actions_onehot: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         batch_size, num_agents, _ = hidden_states.shape
         previous_states = hidden_states
 
-        dynamic_input = jnp.concatenate([hidden_states, actions_onehot], axis=-1)
-        flat_dynamic_input = dynamic_input.reshape(batch_size * num_agents, -1)
+        attn_input = jnp.concatenate([hidden_states, actions_onehot], axis=-1)
+        
+        attn_projection = fnn.Dense(features=self.hidden_state_size)(attn_input)
+        attn_projection = fnn.relu(attn_projection)
+        
+        agent_context = AttentionEncoder(
+            num_layers=self.attention_layers,
+            num_heads=self.attention_heads,
+            hidden_size=self.hidden_state_size
+        )(attn_projection)
+
+        dynamic_input_with_context = jnp.concatenate([hidden_states, actions_onehot, agent_context], axis=-1)
+        flat_dynamic_input = dynamic_input_with_context.reshape(batch_size * num_agents, -1)
         
         dynamic_net = MLP(layer_sizes=self.fc_dynamic_layers, output_size=self.hidden_state_size)
         next_latent_states = dynamic_net(flat_dynamic_input).reshape(batch_size, num_agents, -1)
-        next_latent_states += previous_states
+        next_latent_states += previous_states # Residual connection
 
         reward_input = jnp.concatenate([next_latent_states, actions_onehot], axis=-1)
         flat_reward_input = reward_input.reshape(batch_size, -1)

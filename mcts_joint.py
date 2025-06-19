@@ -56,7 +56,8 @@ class MCTSJointPlanner:
             # Dynamics + prediction
             next_latent, reward_logits, multi_logits, value_logits = self.model.apply(
                 {'params': params}, latent, joint_action,
-                method=self.model.recurrent_inference
+                method=self.model.recurrent_inference,
+                rngs={'dropout': rng_key}
             )
             value = utils.support_to_scalar(value_logits, self.value_support)
             reward = utils.support_to_scalar(reward_logits, self.reward_support)
@@ -109,9 +110,11 @@ class MCTSJointPlanner:
         return self.plan_jit(params, rng_key, observation)
 
     def _plan_loop(self, params, rng_key, observation):
+        init_key, gumbel_key = jax.random.split(rng_key)
         # 1. Initial inference from the model
         root_latent, _, root_logits_per_agent, root_value_logits = self.model.apply(
-            {'params': params}, observation
+            {'params': params}, observation,
+            rngs={'dropout': init_key}
         )
 
         # 2. Convert per-agent logits to joint action logits
@@ -127,7 +130,7 @@ class MCTSJointPlanner:
         
         policy_output = mctx.gumbel_muzero_policy(
             params=params,
-            rng_key=rng_key,
+            rng_key=gumbel_key,
             root=root,
             recurrent_fn=self._recurrent_fn,
             num_simulations=self.num_simulations,
