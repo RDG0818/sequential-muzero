@@ -7,9 +7,8 @@ import optax
 import numpy as np
 from collections import deque
 import time
-from mpe2 import simple_spread_v3
 from flax_model import FlaxMAMuZeroNet
-from mcts import MCTSPlanner
+from mcts.mcts_independent import MCTSPlanner
 from replay_buffer import ReplayItem, ReplayBuffer
 import utils
 from utils import DiscreteSupport
@@ -39,26 +38,26 @@ HYPERPARAMS = { "planner_mode": "independent",
                "fc_policy_layers": (32,)}
 
 
-class MPEEnvWrapper:
-    def __init__(self, num_agents, max_steps):
-        self.env = simple_spread_v3.parallel_env(N=num_agents, max_cycles=max_steps, continuous_actions=False)
-        self.num_agents = num_agents
-        self.agents = self.env.possible_agents
-        self.observation_size = self.env.observation_space(self.agents[0]).shape[0]
-        self.action_space_size = self.env.action_space(self.agents[0]).n
+# class MPEEnvWrapper:
+#     def __init__(self, num_agents, max_steps):
+#         self.env = simple_spread_v3.parallel_env(N=num_agents, max_cycles=max_steps, continuous_actions=False)
+#         self.num_agents = num_agents
+#         self.agents = self.env.possible_agents
+#         self.observation_size = self.env.observation_space(self.agents[0]).shape[0]
+#         self.action_space_size = self.env.action_space(self.agents[0]).n
 
-    def reset(self, rng_key):
-        obs_dict, _ = self.env.reset(seed=int(jax.random.randint(rng_key, (), 0, 1e9)))
-        return self._stack_obs(obs_dict)
+#     def reset(self, rng_key):
+#         obs_dict, _ = self.env.reset(seed=int(jax.random.randint(rng_key, (), 0, 1e9)))
+#         return self._stack_obs(obs_dict)
 
-    def step(self, joint_action: np.ndarray):
-        action_dict = {agent: action.item() for agent, action in zip(self.agents, joint_action)}
-        next_obs_dict, reward_dict, done_dict, _, _ = self.env.step(action_dict)
-        return self._stack_obs(next_obs_dict), sum(reward_dict.values()), all(done_dict.values())
+#     def step(self, joint_action: np.ndarray):
+#         action_dict = {agent: action.item() for agent, action in zip(self.agents, joint_action)}
+#         next_obs_dict, reward_dict, done_dict, _, _ = self.env.step(action_dict)
+#         return self._stack_obs(next_obs_dict), sum(reward_dict.values()), all(done_dict.values())
 
-    def _stack_obs(self, obs_dict):
-        obs_list = [np.asarray(obs_dict[agent], dtype=np.float32) for agent in self.agents]
-        return np.stack(obs_list, axis=0)[np.newaxis, ...]
+#     def _stack_obs(self, obs_dict):
+#         obs_list = [np.asarray(obs_dict[agent], dtype=np.float32) for agent in self.agents]
+#         return np.stack(obs_list, axis=0)[np.newaxis, ...]
 
 
 def train_step(model, optimizer, params, opt_state, batch, rng_key):
