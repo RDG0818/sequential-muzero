@@ -32,13 +32,13 @@ class LearnerActor:
         import jax
         import optax
         from flax_model import FlaxMAMuZeroNet
-        from train import train_step
+        from train import train_step, MPEEnvWrapper
         from jaxmarl_env_wrapper import JaxMARLEnvWrapper
         print(f"(Learner pid={os.getpid()}) Initializing on GPU...")
 
         self.replay_buffer = replay_buffer_actor
         self.rng_key = jax.random.PRNGKey(42)
-        env = JaxMARLEnvWrapper("MPE_simple_spread_v3", HYPERPARAMS["num_agents"], HYPERPARAMS["max_episode_steps"])
+        env = MPEEnvWrapper(HYPERPARAMS["num_agents"], HYPERPARAMS["max_episode_steps"])
         model_kwargs = {k: v for k, v in HYPERPARAMS.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
         model_kwargs['action_space_size'] = env.action_space_size
         self.model = FlaxMAMuZeroNet(num_agents=HYPERPARAMS["num_agents"], **model_kwargs)
@@ -84,7 +84,7 @@ class DataActor:
         from mcts.mcts_joint import MCTSJointPlanner
         from mcts.mcts_sequential import MCTSSequentialPlanner
         from utils import DiscreteSupport
-        from train import process_episode
+        from train import process_episode, MPEEnvWrapper
         from jaxmarl_env_wrapper import JaxMARLEnvWrapper
         from flax_model import FlaxMAMuZeroNet
         
@@ -94,7 +94,7 @@ class DataActor:
         self.replay_buffer = replay_buffer_actor
         
         self.rng_key = jax.random.PRNGKey(int(time.time()) + actor_id)
-        self.env_wrapper = JaxMARLEnvWrapper("MPE_simple_spread_v3", HYPERPARAMS["num_agents"], HYPERPARAMS["max_episode_steps"])
+        self.env_wrapper = MPEEnvWrapper(HYPERPARAMS["num_agents"], HYPERPARAMS["max_episode_steps"])
         model_kwargs = {k: v for k, v in HYPERPARAMS.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
         model_kwargs['action_space_size'] = self.env_wrapper.action_space_size
         model = FlaxMAMuZeroNet(num_agents=HYPERPARAMS["num_agents"], **model_kwargs)
@@ -115,7 +115,7 @@ class DataActor:
         params = ray.get(self.learner.get_params.remote())
         
         self.rng_key, episode_key, plan_key = jax.random.split(self.rng_key, 3)
-        observation = self.env_wrapper.reset()
+        observation = self.env_wrapper.reset(episode_key)
         episode_history, episode_return = [], 0.0
 
         for _ in range(HYPERPARAMS["max_episode_steps"]):

@@ -39,18 +39,18 @@ class DynamicsNetwork(fnn.Module):
         batch_size, num_agents, _ = hidden_states.shape
         previous_states = hidden_states
 
-        attn_input = jnp.concatenate([hidden_states, actions_onehot], axis=-1)
+        # attn_input = jnp.concatenate([hidden_states, actions_onehot], axis=-1)
         
-        attn_projection = fnn.Dense(features=self.hidden_state_size)(attn_input)
-        attn_projection = fnn.relu(attn_projection)
+        # attn_projection = fnn.Dense(features=self.hidden_state_size)(attn_input)
+        # attn_projection = fnn.relu(attn_projection)
         
-        agent_context = AttentionEncoder(
-            num_layers=self.attention_layers,
-            num_heads=self.attention_heads,
-            hidden_size=self.hidden_state_size
-        )(attn_projection)
+        # agent_context = AttentionEncoder(
+        #     num_layers=self.attention_layers,
+        #     num_heads=self.attention_heads,
+        #     hidden_size=self.hidden_state_size
+        # )(attn_projection)
 
-        dynamic_input_with_context = jnp.concatenate([hidden_states, actions_onehot, agent_context], axis=-1)
+        dynamic_input_with_context = jnp.concatenate([hidden_states, actions_onehot], axis=-1)
         flat_dynamic_input = dynamic_input_with_context.reshape(batch_size * num_agents, -1)
         
         dynamic_net = MLP(layer_sizes=self.fc_dynamic_layers, output_size=self.hidden_state_size)

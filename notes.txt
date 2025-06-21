@@ -1,0 +1,18 @@
+Best Performance ~ -200: 
+Representation/Dynamics: Single 128
+Hidden State Size: 128
+
+Others:
+~ -300
+Representation/Dynamics: double 64
+Hidden State Size: 64
+
+~ -200
+Representation/Dynamics: double 128
+Hidden State Size: 128
+
+~ pending
+Representation/Dynamics: double 64
+Hidden State Size: 128
+
+In general, attention mechanism has made things worse. Needs more testing.
