@@ -29,6 +29,7 @@ def sinusoidal_positional_encoding(seq_len: int, d_model: int):
     pos_enc = pos_enc.at[:, 1::2].set(jnp.cos(position * div_term))
     return pos_enc[jnp.newaxis, ...] # Add batch dimension
 
+
 class TransformerEncoderLayer(fnn.Module):
     """A single layer of a Transformer encoder."""
     num_heads: int
@@ -52,6 +53,7 @@ class TransformerEncoderLayer(fnn.Module):
         y = MLP(layer_sizes=(self.hidden_size * 2,), output_size=self.hidden_size)(y)
         x = x + fnn.Dropout(rate=self.dropout_rate)(y, deterministic=deterministic)
         return x
+
 
 class AttentionEncoder(fnn.Module):
     """An attention-based encoder to model agent interactions."""

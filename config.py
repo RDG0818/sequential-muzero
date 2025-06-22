@@ -17,8 +17,8 @@ HYPERPARAMS = { "planner_mode": "joint",  # "independent" or "joint"
                "value_support_size": 300,
                "reward_support_size": 300,
                "hidden_state_size": 128,
-               "fc_representation_layers": (64,64),
-               "fc_dynamic_layers": (64,64),
+               "fc_representation_layers": (128,),
+               "fc_dynamic_layers": (128,),
                "fc_reward_layers": (32,),
                "fc_value_layers": (32,),
                "fc_policy_layers": (32,)}
