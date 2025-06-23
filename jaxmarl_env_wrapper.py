@@ -2,7 +2,6 @@
 import jax
 import jaxmarl
 import numpy as np
-from config import HYPERPARAMS
 
 class JaxMARLEnvWrapper:
     """

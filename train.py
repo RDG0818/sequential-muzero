@@ -20,7 +20,7 @@ class ReplayBufferActor:
     def add(self, item):
         self.replay_buffer.add(item)
     
-    def get_size(self) -> int:
+    def get_size(self):
         return len(self.replay_buffer)
     
     def sample(self, batch_size):
@@ -131,7 +131,6 @@ class LearnerActor:
         # Convert metrics to standard Python types for logging
         metrics = {k: v.item() for k, v in metrics.items()}
         metrics['learning_rate'] = self.lr_schedule(self.train_step_count).item()
-        metrics['train_step_count'] = self.train_step_count
 
         return metrics
         
@@ -160,7 +159,6 @@ class DataActor:
         self.actor_id = actor_id
         self.learner = learner_actor
         self.replay_buffer = replay_buffer_actor
-        self.params = None
         self.value_support = DiscreteSupport(min=-CONFIG["value_support_size"], max=CONFIG["value_support_size"])
         self.reward_support = DiscreteSupport(min=-CONFIG["reward_support_size"], max=CONFIG["reward_support_size"])
         
@@ -177,12 +175,6 @@ class DataActor:
         planner_config = {"num_simulations": CONFIG["num_simulations"], "max_depth_gumbel_search": CONFIG["max_depth_gumbel_search"], "num_gumbel_samples": CONFIG["num_gumbel_samples"]}
         planner = planner_classes[CONFIG["planner_mode"]](model=model, **planner_config)
         self.plan_fn = jax.jit(planner.plan)
-
-        # Episode runner
-        self.jitted_episode_runner = jax.jit(
-            self._generate_and_process_episode_fn,
-            static_argnames=['model', 'env_wrapper', 'planner_class']
-        )
 
         print(f"(DataActor pid={os.getpid()}) Setup complete.")
 
@@ -253,8 +245,6 @@ class DataActor:
         replay_item = self.process_episode(episode_history, CONFIG["unroll_steps"], CONFIG["discount_gamma"], self.value_support, self.reward_support)
         self.replay_buffer.add.remote(replay_item)
         return episode_return
-    
-    def set_params(self, params): self.params = params
 
 
 def main():
@@ -268,23 +258,24 @@ def main():
     learner = LearnerActor.remote(replay_buffer)
     actors = [DataActor.remote(i, learner, replay_buffer) for i in range(CONFIG["num_actors"])]
     
-    # Initial Parameter Sync
-    print("Syncing initial parameters to all actors...")
-    latest_params = ray.get(learner.get_params.remote())
-    ray.get([actor.set_params.remote(latest_params) for actor in actors])
-
-    print("\nWaiting for actors to initialize and run one episode...")
+    print("Waiting for actors to initialize and run one episode...")
+    # This ensures the __init__ methods have completed before we proceed.
     ray.get([actor.run_episode.remote() for actor in actors]) 
 
     # Warmup Phase
     print("\nWarmup phase...")
+    # Use a dictionary to map running tasks (ObjectRefs) to the actor that started them
     actor_tasks = {actor.run_episode.remote(): actor for actor in actors}
     while ray.get(replay_buffer.get_size.remote()) < CONFIG["warmup_episodes"]:
         # Wait for any single actor to finish its episode
         done_refs, _ = ray.wait(list(actor_tasks.keys()), num_returns=1)
         done_ref = done_refs[0]
+
+        # Get the actor that just finished
         finished_actor = actor_tasks.pop(done_ref)
-        actor_tasks[finished_actor.run_episode.remote()] = finished_actor # Immediately start a new episode
+        
+        # Start a new episode on the same actor and add it back to our task dict
+        actor_tasks[finished_actor.run_episode.remote()] = finished_actor
 
         print(f"  Buffer size: {ray.get(replay_buffer.get_size.remote())}/{CONFIG['warmup_episodes']}", end="\r")
 
@@ -295,6 +286,7 @@ def main():
     losses = deque(maxlen=CONFIG['log_interval'])
     start_time = time.time()
     
+    # Start the first training step
     learner_task = learner.train.remote()
 
     while episodes_processed < CONFIG["num_episodes"]:
@@ -317,15 +309,8 @@ def main():
             loss_dict = ray.get(done_learner_refs[0])
             losses.append(loss_dict['total_loss'])
             wandb.log(loss_dict, step=episodes_processed) 
-            learner_task = learner.train.remote() # Start the next training step
-            
-            ############## COULD BREAK CODE #########################
-            # Periodically push the new parameters to the actors.
-            # train_step_count = loss_dict.get("train_step_count", 0)
-            # if train_step_count % 10 == 0:
-            #     latest_params = ray.get(learner.get_params.remote())
-            #     for actor in actors:
-            #         actor.set_params.remote(latest_params)
+            # Start the next training step
+            learner_task = learner.train.remote()
 
         # Periodic logging
         if episodes_processed % CONFIG['log_interval'] == 0 and returns:
