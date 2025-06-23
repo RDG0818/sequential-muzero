@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import mctx
 import functools
 from typing import NamedTuple
-from flax_model import FlaxMAMuZeroNet
+from model.model import FlaxMAMuZeroNet
 import utils
 from utils import DiscreteSupport
 

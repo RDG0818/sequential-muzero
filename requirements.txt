@@ -3,4 +3,5 @@ jaxlib
 flax
 ray
 optax
-mpe2
+jaxmarl
+colorama

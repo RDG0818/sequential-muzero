@@ -5,22 +5,22 @@ import numpy as np
 from collections import deque
 import multiprocessing as mp
 import os
+import logging
 from replay_buffer import ReplayItem
 
-from config import HYPERPARAMS
+from config import CONFIG
 import wandb
 
 @ray.remote
 class ReplayBufferActor:
-    """Actor for the replay buffer. Safe from JAX issues."""
     def __init__(self):
         from replay_buffer import ReplayBuffer
-        self.replay_buffer = ReplayBuffer(HYPERPARAMS["replay_buffer_size"])
+        self.replay_buffer = ReplayBuffer(CONFIG["replay_buffer_size"])
     
     def add(self, item):
         self.replay_buffer.add(item)
     
-    def get_size(self):
+    def get_size(self) -> int:
         return len(self.replay_buffer)
     
     def sample(self, batch_size):
@@ -29,59 +29,60 @@ class ReplayBufferActor:
 
 @ray.remote(num_gpus=1)
 class LearnerActor:
-    """Learner actor that lives on the GPU."""
     def __init__(self, replay_buffer_actor):
         import jax
         import optax
-        from flax_model import FlaxMAMuZeroNet
+        from model.model import FlaxMAMuZeroNet
         from jaxmarl_env_wrapper import JaxMARLEnvWrapper
         print(f"(Learner pid={os.getpid()}) Initializing on GPU...")
-
-        self.replay_buffer = replay_buffer_actor
-        self.rng_key = jax.random.PRNGKey(42)
-        env = JaxMARLEnvWrapper("MPE_simple_spread_v3", HYPERPARAMS["num_agents"], HYPERPARAMS["max_episode_steps"])
-        model_kwargs = {k: v for k, v in HYPERPARAMS.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
-        model_kwargs['action_space_size'] = env.action_space_size
-        self.model = FlaxMAMuZeroNet(num_agents=HYPERPARAMS["num_agents"], **model_kwargs)
         
+        # Basic setup
+        self.replay_buffer = replay_buffer_actor
+        N, lr = CONFIG["num_agents"], CONFIG["learning_rate"]
+        self.rng_key = jax.random.PRNGKey(42)
+        self.train_step_count = 0
+
+        # env and model setup
+        env = JaxMARLEnvWrapper(CONFIG["env_name"], N, CONFIG["max_episode_steps"])
+        model_kwargs = {k: v for k, v in CONFIG.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
+        model_kwargs['action_space_size'] = env.action_space_size
+        self.model = FlaxMAMuZeroNet(num_agents=N, **model_kwargs)
+        
+        # Initialize model parameters
         self.rng_key, init_key = jax.random.split(self.rng_key)
-        dummy_obs = jax.numpy.ones((1, HYPERPARAMS["num_agents"], env.observation_size))
+        dummy_obs = jax.numpy.ones((1, N, env.observation_size))
         self.params = self.model.init(init_key, dummy_obs)['params']
 
-        self.lr_schedule = optax.warmup_cosine_decay_schedule(init_value=0.0, peak_value=HYPERPARAMS["learning_rate"], warmup_steps=5000, decay_steps=HYPERPARAMS["num_episodes"] - 5000, end_value=HYPERPARAMS["learning_rate"]/10)
+        # Optimizer setup
+        self.lr_schedule = optax.warmup_cosine_decay_schedule(init_value=0.0, peak_value=lr, warmup_steps=5000, decay_steps=CONFIG["num_episodes"] - 5000, end_value=lr/10)
         self.optimizer = optax.chain(optax.clip_by_global_norm(5.0), optax.adamw(learning_rate=self.lr_schedule))
         self.opt_state = self.optimizer.init(self.params)
+
         self.jitted_train_step = jax.jit(self.train_step, static_argnames=['model', 'optimizer'])
-        self.train_step_count = 0
+        
         print(f"(Learner pid={os.getpid()}) Setup complete.")
 
-    def train_step(self, model, optimizer, params, opt_state, batch, rng_key):
+    @staticmethod
+    def train_step(model, optimizer, params, opt_state, batch, rng_key):
         import jax
         import optax
-        loss_rng, new_train_rng = jax.random.split(rng_key)
+        
         def loss_fn(p):
-            total_loss = 0.0
-            reward_loss_total, policy_loss_total, value_loss_total = 0.0, 0.0, 0.0
-            
-            dropout_rng, initial_rng, unroll_rng = jax.random.split(loss_rng, 3)
-            unroll_keys = jax.random.split(unroll_rng, HYPERPARAMS["unroll_steps"])
-            # MuZero-style unrolled loss calculation
+            reward_loss, policy_loss, value_loss = 0.0, 0.0, 0.0
+
+            dropout_rng, initial_rng, unroll_rng = jax.random.split(rng_key, 3)
+            unroll_keys = jax.random.split(unroll_rng, CONFIG["unroll_steps"])
+
             hidden, _, p0_logits, v0_logits = model.apply(
                 {'params': p}, batch.observation,
                 rngs={'dropout': initial_rng}
             )
 
-            policy_loss = optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0, :, :]).mean()
-            
-            value_loss = optax.softmax_cross_entropy(v0_logits, batch.value_target[:, 0, :]).mean()
+            policy_loss += optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0, :, :]).mean()
+            value_loss += optax.softmax_cross_entropy(v0_logits, batch.value_target[:, 0, :]).mean()
 
-            policy_loss_total += policy_loss
-            value_loss_total += value_loss
-
-            total_loss += policy_loss + value_loss
-
-            # Unroll dynamics for U steps
-            for i in range(HYPERPARAMS["unroll_steps"]):
+            # Unrolled Loss Calculations
+            for i in range(CONFIG["unroll_steps"]):
                 ai = batch.actions[:, i, :] # (B, N)
 
                 hidden, ri_logits, pi_logits, vi_logits = model.apply(
@@ -92,48 +93,47 @@ class LearnerActor:
                     rngs={'dropout': unroll_keys[i]}
                 )
 
-                reward_loss = optax.softmax_cross_entropy(ri_logits, batch.reward_target[:, i, :]).mean()
-
-                p_loss = optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1, :, :]).mean()
-
-                v_loss = optax.softmax_cross_entropy(vi_logits, batch.value_target[:, i+1, :]).mean()
-
-                reward_loss_total += reward_loss
-                policy_loss_total += p_loss
-                value_loss_total += v_loss
-                
-                total_loss += reward_loss + p_loss + v_loss
+                reward_loss += optax.softmax_cross_entropy(ri_logits, batch.reward_target[:, i, :]).mean()
+                policy_loss += optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1, :, :]).mean()
+                value_loss += optax.softmax_cross_entropy(vi_logits, batch.value_target[:, i+1, :]).mean()
             
-            aux_data = {
+            total_loss = reward_loss + policy_loss + value_loss
+
+            metrics = {
                 "total_loss": total_loss,
-                "reward_loss": reward_loss_total,
-                "policy_loss": policy_loss_total,
-                "value_loss": value_loss_total
+                "reward_loss": reward_loss,
+                "policy_loss": policy_loss,
+                "value_loss": value_loss
             }
 
-            return total_loss, aux_data
+            return total_loss, metrics
 
-        (loss, aux_data), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
-        grad_norm = optax.global_norm(grads)
-        aux_data['grad_norm'] = grad_norm
+        (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+        metrics['grad_norm'] = optax.global_norm(grads)
+        
         updates, new_opt_state = optimizer.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
-        return new_params, new_opt_state, aux_data
+
+        return new_params, new_opt_state, metrics
 
     def train(self):
         import jax
 
+        # Sample a batch from the replay buffer
         self.rng_key, train_key = jax.random.split(self.rng_key)
-
-        numpy_batch = ray.get(self.replay_buffer.sample.remote(HYPERPARAMS["batch_size"]))
-        
+        numpy_batch = ray.get(self.replay_buffer.sample.remote(CONFIG["batch_size"]))
         jax_batch = jax.tree_util.tree_map(lambda x: jax.device_put(x), numpy_batch)
 
-        self.params, self.opt_state, aux_data = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch, train_key)
+        # Perform a training step
+        self.params, self.opt_state, metrics = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch, train_key)
         self.train_step_count += 1
-        aux_data = {k: v.item() for k, v in aux_data.items()}
-        aux_data['learning_rate'] = self.lr_schedule(self.train_step_count).item()
-        return aux_data
+
+        # Convert metrics to standard Python types for logging
+        metrics = {k: v.item() for k, v in metrics.items()}
+        metrics['learning_rate'] = self.lr_schedule(self.train_step_count).item()
+        metrics['train_step_count'] = self.train_step_count
+
+        return metrics
         
     def get_params(self): return self.params
     def get_train_step_count(self): return self.train_step_count
@@ -141,11 +141,10 @@ class LearnerActor:
 
 @ray.remote(num_cpus=1)
 class DataActor:
-    """Data generating actor that initializes all components within its own process on the CPU."""
     def __init__(self, actor_id, learner_actor, replay_buffer_actor):
-        # CRITICAL: Set environment variables BEFORE any other imports, especially JAX
+        # Force CPU usage for this actor
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
-        os.environ['JAX_PLATFORMS'] = 'cpu' # This is the key fix
+        os.environ['JAX_PLATFORMS'] = 'cpu'
         
         import jax
         from mcts.mcts_independent import MCTSPlanner
@@ -153,27 +152,38 @@ class DataActor:
         from mcts.mcts_sequential import MCTSSequentialPlanner
         from utils import DiscreteSupport
         from jaxmarl_env_wrapper import JaxMARLEnvWrapper
-        from flax_model import FlaxMAMuZeroNet
+        from model.model import FlaxMAMuZeroNet
         
         print(f"(DataActor pid={os.getpid()}) Initializing on CPU...")
+
+        # Basic setup
         self.actor_id = actor_id
         self.learner = learner_actor
         self.replay_buffer = replay_buffer_actor
+        self.params = None
+        self.value_support = DiscreteSupport(min=-CONFIG["value_support_size"], max=CONFIG["value_support_size"])
+        self.reward_support = DiscreteSupport(min=-CONFIG["reward_support_size"], max=CONFIG["reward_support_size"])
         
+        # Env and model setup
         self.rng_key = jax.random.PRNGKey(int(time.time()) + actor_id)
-        self.env_wrapper = JaxMARLEnvWrapper("MPE_simple_spread_v3", HYPERPARAMS["num_agents"], HYPERPARAMS["max_episode_steps"])
-        model_kwargs = {k: v for k, v in HYPERPARAMS.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
+        self.env_wrapper = JaxMARLEnvWrapper(CONFIG['env_name'], CONFIG["num_agents"], CONFIG["max_episode_steps"])
+        model_kwargs = {k: v for k, v in CONFIG.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
         model_kwargs['action_space_size'] = self.env_wrapper.action_space_size
-        model = FlaxMAMuZeroNet(num_agents=HYPERPARAMS["num_agents"], **model_kwargs)
+        model = FlaxMAMuZeroNet(num_agents=CONFIG["num_agents"], **model_kwargs)
         
-        if HYPERPARAMS["planner_mode"] == "independent": planner = MCTSPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
-        elif HYPERPARAMS["planner_mode"] == "joint": planner = MCTSJointPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
-        elif HYPERPARAMS["planner_mode"] == "sequential": planner = MCTSSequentialPlanner(model=model, num_simulations=HYPERPARAMS["num_simulations"], max_depth_gumbel_search=HYPERPARAMS["max_depth_gumbel_search"], num_gumbel_samples=HYPERPARAMS["num_gumbel_samples"])
-        else: raise ValueError(f"Invalid planner mode: {HYPERPARAMS['planner_mode']}") 
+        # MCTS planner setup
+        planner_classes = {"independent": MCTSPlanner, "joint": MCTSJointPlanner,"sequential": MCTSSequentialPlanner}
+        if CONFIG["planner_mode"] not in planner_classes: raise ValueError(f"Invalid planner mode: {CONFIG['planner_mode']}")
+        planner_config = {"num_simulations": CONFIG["num_simulations"], "max_depth_gumbel_search": CONFIG["max_depth_gumbel_search"], "num_gumbel_samples": CONFIG["num_gumbel_samples"]}
+        planner = planner_classes[CONFIG["planner_mode"]](model=model, **planner_config)
         self.plan_fn = jax.jit(planner.plan)
 
-        self.value_support = DiscreteSupport(min=-HYPERPARAMS["value_support_size"], max=HYPERPARAMS["value_support_size"])
-        self.reward_support = DiscreteSupport(min=-HYPERPARAMS["reward_support_size"], max=HYPERPARAMS["reward_support_size"])
+        # Episode runner
+        self.jitted_episode_runner = jax.jit(
+            self._generate_and_process_episode_fn,
+            static_argnames=['model', 'env_wrapper', 'planner_class']
+        )
+
         print(f"(DataActor pid={os.getpid()}) Setup complete.")
 
     def process_episode(self, episode_history: list, unroll_steps: int, discount_gamma: float, value_support, reward_support):
@@ -231,7 +241,7 @@ class DataActor:
         observation = self.env_wrapper.reset()
         episode_history, episode_return = [], 0.0
 
-        for _ in range(HYPERPARAMS["max_episode_steps"]):
+        for _ in range(CONFIG["max_episode_steps"]):
             plan_output = self.plan_fn(params, plan_key, observation)
             action_np = np.asarray(plan_output.joint_action)
             episode_history.append({"observation": observation, "actions": action_np, "policy_target": np.asarray(plan_output.policy_targets)})
@@ -240,51 +250,54 @@ class DataActor:
             episode_history[-1]['reward'] = reward
             if done: break
         
-        replay_item = self.process_episode(episode_history, HYPERPARAMS["unroll_steps"], HYPERPARAMS["discount_gamma"], self.value_support, self.reward_support)
+        replay_item = self.process_episode(episode_history, CONFIG["unroll_steps"], CONFIG["discount_gamma"], self.value_support, self.reward_support)
         self.replay_buffer.add.remote(replay_item)
         return episode_return
+    
+    def set_params(self, params): self.params = params
 
 
 def main():
+    # Initialization
     ray.init(ignore_reinit_error=True)
-    wandb.init(project="toy_mazero", config=HYPERPARAMS)
+    wandb.init(project="toy_mazero", config=CONFIG)
+    
     print(f"Ray cluster started. Available resources: {ray.available_resources()}")
     
     replay_buffer = ReplayBufferActor.remote()
     learner = LearnerActor.remote(replay_buffer)
-    actors = [DataActor.remote(i, learner, replay_buffer) for i in range(HYPERPARAMS["num_actors"])]
+    actors = [DataActor.remote(i, learner, replay_buffer) for i in range(CONFIG["num_actors"])]
     
-    print("Waiting for actors to initialize and run one episode...")
-    # This ensures the __init__ methods have completed before we proceed.
-    ray.get([actor.run_episode.remote() for actor in actors]) # Bug Fix 1: Correctly iterate over 'actors'
+    # Initial Parameter Sync
+    print("Syncing initial parameters to all actors...")
+    latest_params = ray.get(learner.get_params.remote())
+    ray.get([actor.set_params.remote(latest_params) for actor in actors])
 
+    print("\nWaiting for actors to initialize and run one episode...")
+    ray.get([actor.run_episode.remote() for actor in actors]) 
+
+    # Warmup Phase
     print("\nWarmup phase...")
-    # Use a dictionary to map running tasks (ObjectRefs) to the actor that started them
     actor_tasks = {actor.run_episode.remote(): actor for actor in actors}
-    while ray.get(replay_buffer.get_size.remote()) < HYPERPARAMS["warmup_episodes"]:
+    while ray.get(replay_buffer.get_size.remote()) < CONFIG["warmup_episodes"]:
         # Wait for any single actor to finish its episode
         done_refs, _ = ray.wait(list(actor_tasks.keys()), num_returns=1)
         done_ref = done_refs[0]
-
-        # Get the actor that just finished
         finished_actor = actor_tasks.pop(done_ref)
-        
-        # Start a new episode on the same actor and add it back to our task dict
-        actor_tasks[finished_actor.run_episode.remote()] = finished_actor
+        actor_tasks[finished_actor.run_episode.remote()] = finished_actor # Immediately start a new episode
 
-        print(f"  Buffer size: {ray.get(replay_buffer.get_size.remote())}/{HYPERPARAMS['warmup_episodes']}", end="\r")
+        print(f"  Buffer size: {ray.get(replay_buffer.get_size.remote())}/{CONFIG['warmup_episodes']}", end="\r")
 
+    # Main Training Loop
     print("\nWarmup complete. Starting main training loop.")
-    
     episodes_processed = ray.get(replay_buffer.get_size.remote())
-    returns = deque(maxlen=HYPERPARAMS['log_interval'])
-    losses = deque(maxlen=HYPERPARAMS['log_interval'])
+    returns = deque(maxlen=CONFIG['log_interval'])
+    losses = deque(maxlen=CONFIG['log_interval'])
     start_time = time.time()
     
-    # Start the first training step
     learner_task = learner.train.remote()
 
-    while episodes_processed < HYPERPARAMS["num_episodes"]:
+    while episodes_processed < CONFIG["num_episodes"]:
         # Wait for any single actor to finish its episode
         done_actor_refs, _ = ray.wait(list(actor_tasks.keys()), num_returns=1)
         done_actor_ref = done_actor_refs[0]
@@ -304,14 +317,24 @@ def main():
             loss_dict = ray.get(done_learner_refs[0])
             losses.append(loss_dict['total_loss'])
             wandb.log(loss_dict, step=episodes_processed) 
-            # Start the next training step
-            learner_task = learner.train.remote()
+            learner_task = learner.train.remote() # Start the next training step
+            
+            ############## COULD BREAK CODE #########################
+            # Periodically push the new parameters to the actors.
+            # train_step_count = loss_dict.get("train_step_count", 0)
+            # if train_step_count % 10 == 0:
+            #     latest_params = ray.get(learner.get_params.remote())
+            #     for actor in actors:
+            #         actor.set_params.remote(latest_params)
 
-        if episodes_processed % HYPERPARAMS['log_interval'] == 0 and returns:
+        # Periodic logging
+        if episodes_processed % CONFIG['log_interval'] == 0 and returns:
             avg_return = np.mean(returns)
             avg_loss = np.mean(losses) if losses else 0.0
+            
             wandb.log({
                 "avg_return": avg_return, 
+                "avg_loss": avg_loss,
                 "episodes": episodes_processed
             }, step=episodes_processed)
 
@@ -319,6 +342,7 @@ def main():
             start_time = time.time() 
     
     print("Training finished.")
+    wandb.finish()
     ray.shutdown()
     
 if __name__ == "__main__":

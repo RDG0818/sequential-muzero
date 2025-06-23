@@ -21,7 +21,7 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
     
-    def sample(self, batch_size: int):
+    def sample(self, batch_size: int) -> ReplayItem:
         batch = random.sample(self.buffer, batch_size)
         
         # We now use numpy for batching, making this buffer framework-agnostic.
