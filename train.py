@@ -8,6 +8,7 @@ import os
 from replay_buffer import ReplayItem
 
 from config import HYPERPARAMS
+import wandb
 
 @ray.remote
 class ReplayBufferActor:
@@ -47,8 +48,8 @@ class LearnerActor:
         dummy_obs = jax.numpy.ones((1, HYPERPARAMS["num_agents"], env.observation_size))
         self.params = self.model.init(init_key, dummy_obs)['params']
 
-        lr_schedule = optax.warmup_cosine_decay_schedule(init_value=0.0, peak_value=HYPERPARAMS["learning_rate"], warmup_steps=5000, decay_steps=HYPERPARAMS["num_episodes"] - 5000, end_value=HYPERPARAMS["learning_rate"]/10)
-        self.optimizer = optax.chain(optax.clip_by_global_norm(5.0), optax.adamw(learning_rate=lr_schedule))
+        self.lr_schedule = optax.warmup_cosine_decay_schedule(init_value=0.0, peak_value=HYPERPARAMS["learning_rate"], warmup_steps=5000, decay_steps=HYPERPARAMS["num_episodes"] - 5000, end_value=HYPERPARAMS["learning_rate"]/10)
+        self.optimizer = optax.chain(optax.clip_by_global_norm(5.0), optax.adamw(learning_rate=self.lr_schedule))
         self.opt_state = self.optimizer.init(self.params)
         self.jitted_train_step = jax.jit(self.train_step, static_argnames=['model', 'optimizer'])
         self.train_step_count = 0
@@ -60,6 +61,8 @@ class LearnerActor:
         loss_rng, new_train_rng = jax.random.split(rng_key)
         def loss_fn(p):
             total_loss = 0.0
+            reward_loss_total, policy_loss_total, value_loss_total = 0.0, 0.0, 0.0
+            
             dropout_rng, initial_rng, unroll_rng = jax.random.split(loss_rng, 3)
             unroll_keys = jax.random.split(unroll_rng, HYPERPARAMS["unroll_steps"])
             # MuZero-style unrolled loss calculation
@@ -71,6 +74,9 @@ class LearnerActor:
             policy_loss = optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0, :, :]).mean()
             
             value_loss = optax.softmax_cross_entropy(v0_logits, batch.value_target[:, 0, :]).mean()
+
+            policy_loss_total += policy_loss
+            value_loss_total += value_loss
 
             total_loss += policy_loss + value_loss
 
@@ -91,15 +97,28 @@ class LearnerActor:
                 p_loss = optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1, :, :]).mean()
 
                 v_loss = optax.softmax_cross_entropy(vi_logits, batch.value_target[:, i+1, :]).mean()
+
+                reward_loss_total += reward_loss
+                policy_loss_total += p_loss
+                value_loss_total += v_loss
                 
                 total_loss += reward_loss + p_loss + v_loss
             
-            return total_loss
+            aux_data = {
+                "total_loss": total_loss,
+                "reward_loss": reward_loss_total,
+                "policy_loss": policy_loss_total,
+                "value_loss": value_loss_total
+            }
 
-        loss, grads = jax.value_and_grad(loss_fn)(params)
+            return total_loss, aux_data
+
+        (loss, aux_data), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+        grad_norm = optax.global_norm(grads)
+        aux_data['grad_norm'] = grad_norm
         updates, new_opt_state = optimizer.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
-        return new_params, new_opt_state, loss
+        return new_params, new_opt_state, aux_data
 
     def train(self):
         import jax
@@ -110,9 +129,11 @@ class LearnerActor:
         
         jax_batch = jax.tree_util.tree_map(lambda x: jax.device_put(x), numpy_batch)
 
-        self.params, self.opt_state, loss = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch, train_key)
+        self.params, self.opt_state, aux_data = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch, train_key)
         self.train_step_count += 1
-        return loss.item()
+        aux_data = {k: v.item() for k, v in aux_data.items()}
+        aux_data['learning_rate'] = self.lr_schedule(self.train_step_count).item()
+        return aux_data
         
     def get_params(self): return self.params
     def get_train_step_count(self): return self.train_step_count
@@ -157,7 +178,6 @@ class DataActor:
 
     def process_episode(self, episode_history: list, unroll_steps: int, discount_gamma: float, value_support, reward_support):
         import utils
-        from utils import DiscreteSupport
         import jax.numpy as jnp
         """
         Processes a completed episode to create a ReplayItem for the buffer.
@@ -227,6 +247,7 @@ class DataActor:
 
 def main():
     ray.init(ignore_reinit_error=True)
+    wandb.init(project="toy_mazero", config=HYPERPARAMS)
     print(f"Ray cluster started. Available resources: {ray.available_resources()}")
     
     replay_buffer = ReplayBufferActor.remote()
@@ -280,13 +301,19 @@ def main():
         # Check if the learner is done with its training step
         done_learner_refs, _ = ray.wait([learner_task], timeout=0)
         if done_learner_refs:
-            losses.append(ray.get(done_learner_refs[0]))
+            loss_dict = ray.get(done_learner_refs[0])
+            losses.append(loss_dict['total_loss'])
+            wandb.log(loss_dict, step=episodes_processed) 
             # Start the next training step
             learner_task = learner.train.remote()
 
         if episodes_processed % HYPERPARAMS['log_interval'] == 0 and returns:
             avg_return = np.mean(returns)
             avg_loss = np.mean(losses) if losses else 0.0
+            wandb.log({
+                "avg_return": avg_return, 
+                "episodes": episodes_processed
+            }, step=episodes_processed)
 
             print(f"Episodes: {episodes_processed} | Avg Return: {avg_return:.2f} | Avg Loss: {avg_loss:.4f} | Time: {time.time()-start_time:.2f}s")
             start_time = time.time() 

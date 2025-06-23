@@ -1,0 +1,7 @@
+{"time":"2025-06-23T08:36:45.261645958-05:00","level":"INFO","msg":"stream: starting","core version":"0.20.1","symlink path":"/home/ryan/toy_mazero/wandb/run-20250623_083645-evyxnvb6/logs/debug-core.log"}
+{"time":"2025-06-23T08:36:45.872820274-05:00","level":"INFO","msg":"stream: created new stream","id":"evyxnvb6"}
+{"time":"2025-06-23T08:36:45.872872743-05:00","level":"INFO","msg":"stream: started","id":"evyxnvb6"}
+{"time":"2025-06-23T08:36:45.872906328-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"evyxnvb6"}
+{"time":"2025-06-23T08:36:45.872973046-05:00","level":"INFO","msg":"sender: started","stream_id":"evyxnvb6"}
+{"time":"2025-06-23T08:36:45.873006895-05:00","level":"INFO","msg":"handler: started","stream_id":"evyxnvb6"}
+{"time":"2025-06-23T08:36:46.16301889-05:00","level":"INFO","msg":"Starting system monitor"}

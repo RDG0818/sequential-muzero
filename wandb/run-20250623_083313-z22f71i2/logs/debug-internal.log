@@ -1,0 +1,7 @@
+{"time":"2025-06-23T08:33:13.342402025-05:00","level":"INFO","msg":"stream: starting","core version":"0.20.1","symlink path":"/home/ryan/toy_mazero/wandb/run-20250623_083313-z22f71i2/logs/debug-core.log"}
+{"time":"2025-06-23T08:33:13.700619091-05:00","level":"INFO","msg":"stream: created new stream","id":"z22f71i2"}
+{"time":"2025-06-23T08:33:13.70066682-05:00","level":"INFO","msg":"stream: started","id":"z22f71i2"}
+{"time":"2025-06-23T08:33:13.700716629-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"z22f71i2"}
+{"time":"2025-06-23T08:33:13.700731651-05:00","level":"INFO","msg":"sender: started","stream_id":"z22f71i2"}
+{"time":"2025-06-23T08:33:13.700768129-05:00","level":"INFO","msg":"handler: started","stream_id":"z22f71i2"}
+{"time":"2025-06-23T08:33:13.911102659-05:00","level":"INFO","msg":"Starting system monitor"}

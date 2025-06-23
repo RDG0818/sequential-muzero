@@ -1,0 +1,65 @@
+Ray cluster started. Available resources: {'accelerator_type:G': 1.0, 'GPU': 1.0, 'node:172.23.48.184': 1.0, 'node:__internal_head__': 1.0, 'CPU': 12.0, 'object_store_memory': 4053908275.0, 'memory': 9459119309.0}
+Syncing initial parameters...
+[36m(DataActor pid=60622)[0m (DataActor pid=60622) Initializing on CPU...
+[36m(DataActor pid=60622)[0m (DataActor pid=60622) Setup complete.
+[36m(LearnerActor pid=60623)[0m (Learner pid=60623) Initializing on GPU...
+[36m(LearnerActor pid=60623)[0m (Learner pid=60623) Setup complete.
+[36m(DataActor pid=60633)[0m (DataActor pid=60633) Initializing on CPU...[32m [repeated 5x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[36m(DataActor pid=60624)[0m (DataActor pid=60624) Setup complete.[32m [repeated 5x across cluster][0m
+
+Warmup phase...
+  Buffer size: 1000/1000
+Warmup complete. Starting main training loop.
+Episodes: 1100 | Avg Return: -1534.51 | Avg Loss: 0.0000 | Time: 8.98s
+Episodes: 1200 | Avg Return: -1217.87 | Avg Loss: 0.0000 | Time: 6.97s
+Episodes: 1300 | Avg Return: -1462.30 | Avg Loss: 0.0000 | Time: 6.90s
+Episodes: 1400 | Avg Return: -1629.41 | Avg Loss: 0.0000 | Time: 6.82s
+Traceback (most recent call last):
+  File "/home/ryan/toy_mazero/train.py", line 332, in <module>
+    main()
+  File "/home/ryan/toy_mazero/train.py", line 302, in main
+    train_step_count = ray.get(learner.get_train_step_count.remote())
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/worker.py", line 2849, in get
+    values, debugger_breakpoint = worker.get_objects(object_refs, timeout=timeout)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/worker.py", line 911, in get_objects
+    ] = self.core_worker.get_objects(
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/ryan/toy_mazero/train.py", line 332, in <module>
+    main()
+  File "/home/ryan/toy_mazero/train.py", line 302, in main
+    train_step_count = ray.get(learner.get_train_step_count.remote())
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/worker.py", line 2849, in get
+    values, debugger_breakpoint = worker.get_objects(object_refs, timeout=timeout)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/worker.py", line 911, in get_objects
+    ] = self.core_worker.get_objects(
+KeyboardInterrupt
+Exception ignored in atexit callback: <function _start_and_connect_service.<locals>.teardown_atexit at 0x7174b45f3130>
+Traceback (most recent call last):
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/wandb/sdk/lib/service_connection.py", line 90, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/wandb/sdk/lib/service_connection.py", line 218, in teardown
+    self._router.join()
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt:
+[0m
+Exception ignored in atexit callback: <function shutdown at 0x7174d7c455a0>
+Traceback (most recent call last):
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/worker.py", line 1986, in shutdown
+    time.sleep(0.5)
+KeyboardInterrupt:

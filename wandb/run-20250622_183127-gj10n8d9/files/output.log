@@ -1,0 +1,293 @@
+Ray cluster started. Available resources: {'GPU': 1.0, 'node:172.23.48.184': 1.0, 'memory': 9198943847.0, 'accelerator_type:G': 1.0, 'node:__internal_head__': 1.0, 'CPU': 12.0, 'object_store_memory': 3942404505.0}
+Waiting for actors to initialize and run one episode...
+[36m(DataActor pid=7609)[0m (DataActor pid=7609) Initializing on CPU...
+[36m(DataActor pid=7609)[0m (DataActor pid=7609) Setup complete.
+[36m(LearnerActor pid=7614)[0m (Learner pid=7614) Initializing on GPU...
+[36m(LearnerActor pid=7614)[0m (Learner pid=7614) Setup complete.
+[36m(DataActor pid=7617)[0m (DataActor pid=7617) Initializing on CPU...[32m [repeated 5x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[36m(DataActor pid=7617)[0m (DataActor pid=7617) Setup complete.[32m [repeated 5x across cluster][0m
+
+Warmup phase...
+  Buffer size: 1000/1000
+Warmup complete. Starting main training loop.
+Episodes: 1100 | Avg Return: -1412.62 | Avg Loss: 402.6051 | Time: 18.54s
+Episodes: 1200 | Avg Return: -1436.01 | Avg Loss: 400.8378 | Time: 6.72s
+Episodes: 1300 | Avg Return: -1413.05 | Avg Loss: 396.3452 | Time: 6.61s
+Episodes: 1400 | Avg Return: -1509.60 | Avg Loss: 388.7889 | Time: 7.08s
+Episodes: 1500 | Avg Return: -1385.66 | Avg Loss: 377.2575 | Time: 6.61s
+Episodes: 1600 | Avg Return: -1296.09 | Avg Loss: 364.2047 | Time: 6.37s
+Episodes: 1700 | Avg Return: -1449.51 | Avg Loss: 351.8509 | Time: 7.19s
+Episodes: 1800 | Avg Return: -1648.74 | Avg Loss: 344.2600 | Time: 6.43s
+Episodes: 1900 | Avg Return: -1394.47 | Avg Loss: 338.3117 | Time: 6.82s
+Episodes: 2000 | Avg Return: -1592.32 | Avg Loss: 333.6355 | Time: 6.71s
+Episodes: 2100 | Avg Return: -1360.41 | Avg Loss: 330.7674 | Time: 6.19s
+Episodes: 2200 | Avg Return: -1412.52 | Avg Loss: 326.7251 | Time: 6.40s
+Episodes: 2300 | Avg Return: -1588.85 | Avg Loss: 323.5609 | Time: 6.06s
+Episodes: 2400 | Avg Return: -1545.52 | Avg Loss: 319.8508 | Time: 6.06s
+Episodes: 2500 | Avg Return: -1644.56 | Avg Loss: 316.8298 | Time: 6.25s
+Episodes: 2600 | Avg Return: -1282.34 | Avg Loss: 312.7900 | Time: 7.51s
+Episodes: 2700 | Avg Return: -1281.30 | Avg Loss: 309.8829 | Time: 6.49s
+Episodes: 2800 | Avg Return: -1328.10 | Avg Loss: 306.1444 | Time: 6.25s
+Episodes: 2900 | Avg Return: -1414.22 | Avg Loss: 302.9555 | Time: 6.27s
+Episodes: 3000 | Avg Return: -1663.02 | Avg Loss: 299.1603 | Time: 6.33s
+Episodes: 3100 | Avg Return: -1737.97 | Avg Loss: 295.5470 | Time: 7.71s
+Episodes: 3200 | Avg Return: -1637.91 | Avg Loss: 292.0725 | Time: 8.00s
+Episodes: 3300 | Avg Return: -1711.01 | Avg Loss: 288.3449 | Time: 6.50s
+Episodes: 3400 | Avg Return: -1829.14 | Avg Loss: 282.4136 | Time: 6.56s
+Episodes: 3500 | Avg Return: -1736.68 | Avg Loss: 277.4576 | Time: 6.46s
+Episodes: 3600 | Avg Return: -1659.49 | Avg Loss: 273.7694 | Time: 6.61s
+Episodes: 3700 | Avg Return: -1633.43 | Avg Loss: 269.6355 | Time: 7.06s
+Episodes: 3800 | Avg Return: -1905.93 | Avg Loss: 265.3006 | Time: 6.83s
+Episodes: 3900 | Avg Return: -1641.84 | Avg Loss: 260.2310 | Time: 6.66s
+Episodes: 4000 | Avg Return: -1871.35 | Avg Loss: 255.5984 | Time: 7.39s
+Episodes: 4100 | Avg Return: -1775.52 | Avg Loss: 249.9569 | Time: 7.78s
+Episodes: 4200 | Avg Return: -1825.27 | Avg Loss: 244.2499 | Time: 7.36s
+Episodes: 4300 | Avg Return: -1638.77 | Avg Loss: 239.8478 | Time: 8.28s
+Episodes: 4400 | Avg Return: -1704.32 | Avg Loss: 234.6808 | Time: 7.66s
+Episodes: 4500 | Avg Return: -1807.66 | Avg Loss: 229.6491 | Time: 8.18s
+Episodes: 4600 | Avg Return: -1711.60 | Avg Loss: 223.6350 | Time: 7.92s
+Episodes: 4700 | Avg Return: -1826.24 | Avg Loss: 220.4726 | Time: 7.47s
+Episodes: 4800 | Avg Return: -1912.07 | Avg Loss: 214.8817 | Time: 7.54s
+Episodes: 4900 | Avg Return: -1639.06 | Avg Loss: 209.2892 | Time: 7.62s
+Episodes: 5000 | Avg Return: -1642.12 | Avg Loss: 205.8868 | Time: 7.57s
+Episodes: 5100 | Avg Return: -1561.67 | Avg Loss: 201.2167 | Time: 8.10s
+Episodes: 5200 | Avg Return: -2007.77 | Avg Loss: 198.5146 | Time: 8.37s
+Episodes: 5300 | Avg Return: -1638.77 | Avg Loss: 194.8099 | Time: 8.92s
+Episodes: 5400 | Avg Return: -1631.38 | Avg Loss: 190.7014 | Time: 8.17s
+Episodes: 5500 | Avg Return: -1610.01 | Avg Loss: 186.5272 | Time: 7.76s
+Episodes: 5600 | Avg Return: -1802.20 | Avg Loss: 183.0988 | Time: 8.68s
+Episodes: 5700 | Avg Return: -1765.64 | Avg Loss: 180.7887 | Time: 8.70s
+Episodes: 5800 | Avg Return: -1339.53 | Avg Loss: 178.8441 | Time: 8.79s
+Episodes: 5900 | Avg Return: -1442.11 | Avg Loss: 175.8559 | Time: 8.04s
+Episodes: 6000 | Avg Return: -1376.19 | Avg Loss: 172.7371 | Time: 7.65s
+Episodes: 6100 | Avg Return: -1357.98 | Avg Loss: 170.4992 | Time: 9.06s
+Episodes: 6200 | Avg Return: -1051.25 | Avg Loss: 168.1432 | Time: 7.75s
+Episodes: 6300 | Avg Return: -845.83 | Avg Loss: 165.3791 | Time: 8.08s
+Episodes: 6400 | Avg Return: -756.68 | Avg Loss: 162.5176 | Time: 8.36s
+Episodes: 6500 | Avg Return: -800.66 | Avg Loss: 160.1439 | Time: 8.14s
+Episodes: 6600 | Avg Return: -681.48 | Avg Loss: 157.7601 | Time: 9.21s
+Episodes: 6700 | Avg Return: -527.96 | Avg Loss: 156.3168 | Time: 8.11s
+Episodes: 6800 | Avg Return: -639.28 | Avg Loss: 154.9027 | Time: 8.77s
+Episodes: 6900 | Avg Return: -630.83 | Avg Loss: 153.7217 | Time: 7.48s
+Episodes: 7000 | Avg Return: -594.50 | Avg Loss: 152.3443 | Time: 7.45s
+Episodes: 7100 | Avg Return: -616.07 | Avg Loss: 150.7447 | Time: 7.42s
+Episodes: 7200 | Avg Return: -625.37 | Avg Loss: 149.7558 | Time: 7.84s
+Episodes: 7300 | Avg Return: -579.03 | Avg Loss: 148.8055 | Time: 8.98s
+Episodes: 7400 | Avg Return: -586.20 | Avg Loss: 147.6963 | Time: 8.36s
+Episodes: 7500 | Avg Return: -626.03 | Avg Loss: 147.1484 | Time: 8.33s
+Episodes: 7600 | Avg Return: -528.14 | Avg Loss: 146.5102 | Time: 7.47s
+Episodes: 7700 | Avg Return: -599.94 | Avg Loss: 145.9158 | Time: 7.42s
+Episodes: 7800 | Avg Return: -533.34 | Avg Loss: 144.8735 | Time: 7.49s
+Episodes: 7900 | Avg Return: -556.93 | Avg Loss: 144.2564 | Time: 7.68s
+Episodes: 8000 | Avg Return: -558.86 | Avg Loss: 143.4563 | Time: 7.41s
+Episodes: 8100 | Avg Return: -564.21 | Avg Loss: 143.0229 | Time: 7.46s
+Episodes: 8200 | Avg Return: -559.58 | Avg Loss: 142.5346 | Time: 7.09s
+Episodes: 8300 | Avg Return: -593.81 | Avg Loss: 141.5757 | Time: 7.34s
+Episodes: 8400 | Avg Return: -631.17 | Avg Loss: 140.7531 | Time: 7.00s
+Episodes: 8500 | Avg Return: -497.64 | Avg Loss: 139.9587 | Time: 7.15s
+Episodes: 8600 | Avg Return: -583.37 | Avg Loss: 139.6952 | Time: 7.08s
+Episodes: 8700 | Avg Return: -568.12 | Avg Loss: 139.3309 | Time: 6.99s
+Episodes: 8800 | Avg Return: -516.86 | Avg Loss: 138.6633 | Time: 7.35s
+Episodes: 8900 | Avg Return: -497.55 | Avg Loss: 138.0866 | Time: 7.54s
+Episodes: 9000 | Avg Return: -585.44 | Avg Loss: 137.7105 | Time: 7.26s
+Episodes: 9100 | Avg Return: -587.94 | Avg Loss: 137.3387 | Time: 7.13s
+Episodes: 9200 | Avg Return: -541.92 | Avg Loss: 136.7969 | Time: 7.45s
+Episodes: 9300 | Avg Return: -541.08 | Avg Loss: 135.9500 | Time: 6.92s
+Episodes: 9400 | Avg Return: -571.73 | Avg Loss: 135.6706 | Time: 8.06s
+Episodes: 9500 | Avg Return: -544.83 | Avg Loss: 135.4158 | Time: 7.60s
+Episodes: 9600 | Avg Return: -498.13 | Avg Loss: 134.8478 | Time: 7.52s
+Episodes: 9700 | Avg Return: -582.46 | Avg Loss: 134.3934 | Time: 7.38s
+Episodes: 9800 | Avg Return: -590.86 | Avg Loss: 134.2224 | Time: 7.44s
+Episodes: 9900 | Avg Return: -554.83 | Avg Loss: 133.5742 | Time: 7.47s
+Episodes: 10000 | Avg Return: -529.58 | Avg Loss: 133.3373 | Time: 7.76s
+Episodes: 10100 | Avg Return: -518.68 | Avg Loss: 133.1269 | Time: 7.90s
+Episodes: 10200 | Avg Return: -541.84 | Avg Loss: 132.5808 | Time: 7.94s
+Episodes: 10300 | Avg Return: -550.33 | Avg Loss: 132.2958 | Time: 7.24s
+Episodes: 10400 | Avg Return: -569.34 | Avg Loss: 131.8806 | Time: 7.29s
+Episodes: 10500 | Avg Return: -586.80 | Avg Loss: 131.5158 | Time: 7.77s
+Episodes: 10600 | Avg Return: -582.79 | Avg Loss: 131.4442 | Time: 7.60s
+Episodes: 10700 | Avg Return: -553.48 | Avg Loss: 131.2119 | Time: 7.82s
+Episodes: 10800 | Avg Return: -556.72 | Avg Loss: 130.6696 | Time: 7.21s
+Episodes: 10900 | Avg Return: -553.28 | Avg Loss: 130.1802 | Time: 7.22s
+Episodes: 11000 | Avg Return: -609.20 | Avg Loss: 130.1956 | Time: 7.08s
+Episodes: 11100 | Avg Return: -494.02 | Avg Loss: 130.0391 | Time: 7.68s
+Episodes: 11200 | Avg Return: -555.80 | Avg Loss: 129.8528 | Time: 7.41s
+Episodes: 11300 | Avg Return: -577.68 | Avg Loss: 129.3503 | Time: 7.25s
+Episodes: 11400 | Avg Return: -464.33 | Avg Loss: 128.8332 | Time: 7.31s
+Episodes: 11500 | Avg Return: -490.71 | Avg Loss: 128.7121 | Time: 7.70s
+Episodes: 11600 | Avg Return: -513.47 | Avg Loss: 128.4644 | Time: 7.98s
+Episodes: 11700 | Avg Return: -548.89 | Avg Loss: 128.4281 | Time: 7.11s
+Episodes: 11800 | Avg Return: -574.01 | Avg Loss: 127.9031 | Time: 7.53s
+Episodes: 11900 | Avg Return: -562.31 | Avg Loss: 127.8212 | Time: 7.22s
+Episodes: 12000 | Avg Return: -477.97 | Avg Loss: 127.7622 | Time: 7.27s
+Episodes: 12100 | Avg Return: -491.55 | Avg Loss: 127.0299 | Time: 8.08s
+Episodes: 12200 | Avg Return: -510.04 | Avg Loss: 126.7386 | Time: 7.53s
+Episodes: 12300 | Avg Return: -538.98 | Avg Loss: 126.2631 | Time: 7.93s
+Episodes: 12400 | Avg Return: -540.48 | Avg Loss: 126.1528 | Time: 8.46s
+Episodes: 12500 | Avg Return: -532.57 | Avg Loss: 125.8773 | Time: 8.54s
+Episodes: 12600 | Avg Return: -490.07 | Avg Loss: 125.8143 | Time: 7.96s
+Episodes: 12700 | Avg Return: -550.19 | Avg Loss: 125.7116 | Time: 7.83s
+Episodes: 12800 | Avg Return: -521.69 | Avg Loss: 125.5922 | Time: 7.21s
+Episodes: 12900 | Avg Return: -590.34 | Avg Loss: 125.1222 | Time: 7.05s
+Episodes: 13000 | Avg Return: -521.83 | Avg Loss: 125.1140 | Time: 7.23s
+Episodes: 13100 | Avg Return: -572.27 | Avg Loss: 124.7462 | Time: 7.18s
+Episodes: 13200 | Avg Return: -524.81 | Avg Loss: 124.8120 | Time: 7.14s
+Episodes: 13300 | Avg Return: -483.31 | Avg Loss: 124.3563 | Time: 7.34s
+Episodes: 13400 | Avg Return: -562.49 | Avg Loss: 124.6442 | Time: 7.45s
+Episodes: 13500 | Avg Return: -494.81 | Avg Loss: 124.2733 | Time: 7.16s
+Episodes: 13600 | Avg Return: -528.94 | Avg Loss: 123.8643 | Time: 8.26s
+Episodes: 13700 | Avg Return: -517.13 | Avg Loss: 123.5089 | Time: 7.31s
+Episodes: 13800 | Avg Return: -525.23 | Avg Loss: 123.5649 | Time: 7.37s
+Episodes: 13900 | Avg Return: -487.99 | Avg Loss: 123.6244 | Time: 7.08s
+Episodes: 14000 | Avg Return: -514.27 | Avg Loss: 123.3362 | Time: 7.35s
+Episodes: 14100 | Avg Return: -527.28 | Avg Loss: 123.2236 | Time: 8.15s
+Episodes: 14200 | Avg Return: -469.21 | Avg Loss: 122.9010 | Time: 8.47s
+Episodes: 14300 | Avg Return: -494.80 | Avg Loss: 122.5433 | Time: 8.25s
+Episodes: 14400 | Avg Return: -473.09 | Avg Loss: 122.4996 | Time: 8.22s
+Episodes: 14500 | Avg Return: -514.14 | Avg Loss: 122.4101 | Time: 7.57s
+Episodes: 14600 | Avg Return: -562.22 | Avg Loss: 122.4807 | Time: 6.81s
+Episodes: 14700 | Avg Return: -430.92 | Avg Loss: 122.1756 | Time: 6.92s
+Episodes: 14800 | Avg Return: -535.43 | Avg Loss: 121.7911 | Time: 7.03s
+Episodes: 14900 | Avg Return: -492.54 | Avg Loss: 121.9332 | Time: 6.98s
+Episodes: 15000 | Avg Return: -595.04 | Avg Loss: 122.3886 | Time: 7.27s
+Episodes: 15100 | Avg Return: -516.42 | Avg Loss: 121.8092 | Time: 7.59s
+Episodes: 15200 | Avg Return: -520.08 | Avg Loss: 121.5853 | Time: 6.94s
+Episodes: 15300 | Avg Return: -513.42 | Avg Loss: 121.5436 | Time: 7.19s
+Episodes: 15400 | Avg Return: -486.00 | Avg Loss: 121.4765 | Time: 7.34s
+Episodes: 15500 | Avg Return: -544.24 | Avg Loss: 121.0380 | Time: 7.09s
+Episodes: 15600 | Avg Return: -511.56 | Avg Loss: 120.8257 | Time: 7.57s
+Episodes: 15700 | Avg Return: -447.99 | Avg Loss: 120.9254 | Time: 8.11s
+Episodes: 15800 | Avg Return: -584.07 | Avg Loss: 120.9520 | Time: 7.14s
+Episodes: 15900 | Avg Return: -498.54 | Avg Loss: 120.4070 | Time: 6.91s
+Episodes: 16000 | Avg Return: -440.49 | Avg Loss: 120.1694 | Time: 7.05s
+Episodes: 16100 | Avg Return: -499.74 | Avg Loss: 120.5877 | Time: 7.59s
+Episodes: 16200 | Avg Return: -485.46 | Avg Loss: 120.4289 | Time: 6.88s
+Episodes: 16300 | Avg Return: -490.55 | Avg Loss: 120.0059 | Time: 7.00s
+Episodes: 16400 | Avg Return: -526.60 | Avg Loss: 119.7786 | Time: 7.48s
+Episodes: 16500 | Avg Return: -545.78 | Avg Loss: 119.8757 | Time: 7.17s
+Episodes: 16600 | Avg Return: -473.16 | Avg Loss: 120.0264 | Time: 7.19s
+Episodes: 16700 | Avg Return: -501.61 | Avg Loss: 119.8190 | Time: 7.37s
+Episodes: 16800 | Avg Return: -496.32 | Avg Loss: 119.6581 | Time: 7.78s
+Episodes: 16900 | Avg Return: -503.56 | Avg Loss: 119.6993 | Time: 7.39s
+Episodes: 17000 | Avg Return: -521.82 | Avg Loss: 119.6117 | Time: 7.02s
+Episodes: 17100 | Avg Return: -517.37 | Avg Loss: 119.2414 | Time: 7.14s
+Episodes: 17200 | Avg Return: -510.27 | Avg Loss: 119.4209 | Time: 7.30s
+Episodes: 17300 | Avg Return: -452.05 | Avg Loss: 119.3782 | Time: 6.77s
+Episodes: 17400 | Avg Return: -521.93 | Avg Loss: 119.1638 | Time: 6.78s
+Episodes: 17500 | Avg Return: -602.52 | Avg Loss: 119.3029 | Time: 6.56s
+Episodes: 17600 | Avg Return: -463.89 | Avg Loss: 119.1111 | Time: 6.81s
+Episodes: 17700 | Avg Return: -476.79 | Avg Loss: 119.0106 | Time: 6.73s
+Episodes: 17800 | Avg Return: -483.55 | Avg Loss: 118.8380 | Time: 6.90s
+Episodes: 17900 | Avg Return: -431.24 | Avg Loss: 118.9143 | Time: 6.75s
+Episodes: 18000 | Avg Return: -520.61 | Avg Loss: 118.9592 | Time: 6.63s
+Episodes: 18100 | Avg Return: -493.11 | Avg Loss: 118.5117 | Time: 6.93s
+Episodes: 18200 | Avg Return: -509.36 | Avg Loss: 118.3443 | Time: 6.54s
+Episodes: 18300 | Avg Return: -470.60 | Avg Loss: 118.2088 | Time: 6.68s
+Episodes: 18400 | Avg Return: -489.73 | Avg Loss: 117.9502 | Time: 6.79s
+Episodes: 18500 | Avg Return: -493.51 | Avg Loss: 118.5081 | Time: 6.73s
+Episodes: 18600 | Avg Return: -463.22 | Avg Loss: 118.4981 | Time: 6.63s
+Episodes: 18700 | Avg Return: -424.34 | Avg Loss: 118.1492 | Time: 6.76s
+Episodes: 18800 | Avg Return: -565.27 | Avg Loss: 117.9006 | Time: 6.71s
+Episodes: 18900 | Avg Return: -560.20 | Avg Loss: 117.7077 | Time: 6.63s
+Episodes: 19000 | Avg Return: -565.70 | Avg Loss: 117.5950 | Time: 6.77s
+Episodes: 19100 | Avg Return: -440.89 | Avg Loss: 118.0746 | Time: 7.06s
+Episodes: 19200 | Avg Return: -441.01 | Avg Loss: 117.8619 | Time: 7.14s
+Episodes: 19300 | Avg Return: -516.89 | Avg Loss: 117.2851 | Time: 8.03s
+Episodes: 19400 | Avg Return: -497.33 | Avg Loss: 117.5632 | Time: 7.73s
+Episodes: 19500 | Avg Return: -504.51 | Avg Loss: 117.6056 | Time: 7.87s
+Episodes: 19600 | Avg Return: -465.04 | Avg Loss: 117.3085 | Time: 7.01s
+Episodes: 19700 | Avg Return: -476.49 | Avg Loss: 117.1901 | Time: 7.00s
+Episodes: 19800 | Avg Return: -503.46 | Avg Loss: 117.3592 | Time: 6.92s
+Episodes: 19900 | Avg Return: -525.45 | Avg Loss: 116.8944 | Time: 7.95s
+Episodes: 20000 | Avg Return: -510.41 | Avg Loss: 116.8985 | Time: 7.06s
+Episodes: 20100 | Avg Return: -551.34 | Avg Loss: 116.8284 | Time: 7.02s
+Episodes: 20200 | Avg Return: -469.83 | Avg Loss: 116.6763 | Time: 6.95s
+Episodes: 20300 | Avg Return: -531.67 | Avg Loss: 116.5817 | Time: 6.83s
+Episodes: 20400 | Avg Return: -448.55 | Avg Loss: 116.5383 | Time: 6.91s
+Episodes: 20500 | Avg Return: -536.18 | Avg Loss: 116.1943 | Time: 6.70s
+Episodes: 20600 | Avg Return: -513.14 | Avg Loss: 116.0167 | Time: 6.89s
+Episodes: 20700 | Avg Return: -484.51 | Avg Loss: 116.4747 | Time: 6.89s
+Episodes: 20800 | Avg Return: -467.36 | Avg Loss: 116.1459 | Time: 6.84s
+Episodes: 20900 | Avg Return: -508.98 | Avg Loss: 116.0752 | Time: 6.70s
+Episodes: 21000 | Avg Return: -439.65 | Avg Loss: 115.8043 | Time: 6.84s
+Episodes: 21100 | Avg Return: -473.63 | Avg Loss: 115.3114 | Time: 6.98s
+Episodes: 21200 | Avg Return: -483.72 | Avg Loss: 115.4627 | Time: 6.78s
+Episodes: 21300 | Avg Return: -496.48 | Avg Loss: 115.2382 | Time: 7.51s
+Episodes: 21400 | Avg Return: -480.86 | Avg Loss: 115.1650 | Time: 7.22s
+Episodes: 21500 | Avg Return: -474.78 | Avg Loss: 114.7381 | Time: 6.72s
+Episodes: 21600 | Avg Return: -500.48 | Avg Loss: 114.5345 | Time: 6.81s
+Episodes: 21700 | Avg Return: -478.06 | Avg Loss: 114.8099 | Time: 6.84s
+Episodes: 21800 | Avg Return: -471.55 | Avg Loss: 114.4997 | Time: 6.83s
+Episodes: 21900 | Avg Return: -439.81 | Avg Loss: 114.3239 | Time: 7.10s
+Episodes: 22000 | Avg Return: -455.36 | Avg Loss: 114.4082 | Time: 6.99s
+Episodes: 22100 | Avg Return: -484.26 | Avg Loss: 113.8458 | Time: 6.97s
+Episodes: 22200 | Avg Return: -458.68 | Avg Loss: 113.7071 | Time: 7.13s
+Episodes: 22300 | Avg Return: -471.33 | Avg Loss: 113.2743 | Time: 7.46s
+Episodes: 22400 | Avg Return: -464.08 | Avg Loss: 113.1832 | Time: 6.95s
+Episodes: 22500 | Avg Return: -494.45 | Avg Loss: 112.9550 | Time: 6.97s
+Episodes: 22600 | Avg Return: -475.13 | Avg Loss: 113.1887 | Time: 7.19s
+Episodes: 22700 | Avg Return: -467.95 | Avg Loss: 112.8051 | Time: 7.15s
+Episodes: 22800 | Avg Return: -429.95 | Avg Loss: 112.3854 | Time: 6.83s
+Episodes: 22900 | Avg Return: -487.64 | Avg Loss: 112.4871 | Time: 6.88s
+Episodes: 23000 | Avg Return: -481.71 | Avg Loss: 112.4277 | Time: 6.73s
+Episodes: 23100 | Avg Return: -475.68 | Avg Loss: 111.9291 | Time: 6.94s
+Episodes: 23200 | Avg Return: -422.60 | Avg Loss: 111.7768 | Time: 7.20s
+Episodes: 23300 | Avg Return: -425.75 | Avg Loss: 111.6578 | Time: 6.93s
+Episodes: 23400 | Avg Return: -456.65 | Avg Loss: 111.5619 | Time: 6.69s
+Episodes: 23500 | Avg Return: -538.31 | Avg Loss: 110.9812 | Time: 6.94s
+Episodes: 23600 | Avg Return: -431.51 | Avg Loss: 110.8185 | Time: 6.91s
+Episodes: 23700 | Avg Return: -431.78 | Avg Loss: 110.8255 | Time: 6.89s
+Episodes: 23800 | Avg Return: -482.14 | Avg Loss: 110.6567 | Time: 6.87s
+Episodes: 23900 | Avg Return: -459.35 | Avg Loss: 110.5821 | Time: 6.68s
+Episodes: 24000 | Avg Return: -438.48 | Avg Loss: 110.0930 | Time: 6.92s
+Episodes: 24100 | Avg Return: -499.51 | Avg Loss: 109.9311 | Time: 7.43s
+Episodes: 24200 | Avg Return: -444.93 | Avg Loss: 109.5854 | Time: 8.14s
+Episodes: 24300 | Avg Return: -466.70 | Avg Loss: 109.2425 | Time: 7.48s
+Episodes: 24400 | Avg Return: -466.34 | Avg Loss: 109.5271 | Time: 7.19s
+Episodes: 24500 | Avg Return: -475.57 | Avg Loss: 109.3948 | Time: 7.38s
+Episodes: 24600 | Avg Return: -443.36 | Avg Loss: 109.1548 | Time: 7.67s
+Episodes: 24700 | Avg Return: -436.37 | Avg Loss: 108.9033 | Time: 8.04s
+Episodes: 24800 | Avg Return: -414.09 | Avg Loss: 108.6192 | Time: 8.46s
+Episodes: 24900 | Avg Return: -407.03 | Avg Loss: 108.3500 | Time: 6.94s
+Episodes: 25000 | Avg Return: -441.49 | Avg Loss: 108.0801 | Time: 7.23s
+Episodes: 25100 | Avg Return: -372.40 | Avg Loss: 108.0297 | Time: 6.94s
+Episodes: 25200 | Avg Return: -435.99 | Avg Loss: 107.7857 | Time: 7.56s
+Episodes: 25300 | Avg Return: -449.76 | Avg Loss: 107.3344 | Time: 7.60s
+Episodes: 25400 | Avg Return: -441.32 | Avg Loss: 107.3381 | Time: 7.52s
+Episodes: 25500 | Avg Return: -463.57 | Avg Loss: 106.6875 | Time: 6.91s
+Episodes: 25600 | Avg Return: -425.27 | Avg Loss: 106.4875 | Time: 6.96s
+Episodes: 25700 | Avg Return: -433.86 | Avg Loss: 106.9716 | Time: 6.87s
+Episodes: 25800 | Avg Return: -445.34 | Avg Loss: 106.2214 | Time: 7.05s
+Episodes: 25900 | Avg Return: -406.92 | Avg Loss: 105.5770 | Time: 6.79s
+Episodes: 26000 | Avg Return: -428.54 | Avg Loss: 105.8793 | Time: 7.10s
+Episodes: 26100 | Avg Return: -440.04 | Avg Loss: 105.5733 | Time: 8.29s
+Episodes: 26200 | Avg Return: -404.45 | Avg Loss: 105.6329 | Time: 7.49s
+Episodes: 26300 | Avg Return: -415.05 | Avg Loss: 105.1996 | Time: 7.25s
+Episodes: 26400 | Avg Return: -407.36 | Avg Loss: 105.2921 | Time: 6.80s
+Episodes: 26500 | Avg Return: -355.78 | Avg Loss: 105.0899 | Time: 6.70s
+Episodes: 26600 | Avg Return: -410.45 | Avg Loss: 104.8882 | Time: 7.63s
+Episodes: 26700 | Avg Return: -396.67 | Avg Loss: 104.7808 | Time: 8.02s
+Episodes: 26800 | Avg Return: -443.29 | Avg Loss: 104.5750 | Time: 7.21s
+Traceback (most recent call last):
+  File "/home/ryan/toy_mazero/train.py", line 316, in <module>
+    avg_loss = np.mean(losses) if losses else 0.0
+  File "/home/ryan/toy_mazero/train.py", line 272, in main
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/worker.py", line 3080, in wait
+    ready_ids, remaining_ids = worker.core_worker.wait(
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "/home/ryan/toy_mazero/train.py", line 316, in <module>
+    avg_loss = np.mean(losses) if losses else 0.0
+  File "/home/ryan/toy_mazero/train.py", line 272, in main
+
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/auto_init_hook.py", line 22, in auto_init_wrapper
+    return fn(*args, **kwargs)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/client_mode_hook.py", line 104, in wrapper
+    return func(*args, **kwargs)
+  File "/home/ryan/miniconda3/envs/jaxmarl_env/lib/python3.10/site-packages/ray/_private/worker.py", line 3080, in wait
+    ready_ids, remaining_ids = worker.core_worker.wait(
+KeyboardInterrupt
