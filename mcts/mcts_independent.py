@@ -6,6 +6,7 @@ from model.model import FlaxMAMuZeroNet
 import utils.utils as utils
 from utils.utils import DiscreteSupport
 import functools
+from config import ExperimentConfig
 
 class MCTSPlanOutput(NamedTuple):
     """Output of MCTSPlanner.plan()."""
@@ -17,19 +18,17 @@ class MCTSPlanner:
     def __init__(
         self,
         model: FlaxMAMuZeroNet,
-        num_simulations: int,
-        max_depth_gumbel_search: int,
-        num_gumbel_samples: int
+        config: ExperimentConfig
     ):
 
         self.model = model
-        self.num_agents = model.num_agents        # N agents
+        self.num_agents = config.train.num_agents        # N agents
         self.action_space_size = model.action_space_size  # A actions
-        self.num_simulations = num_simulations   # MCTS rollout count
-        self.max_depth_gumbel_search = max_depth_gumbel_search
-        self.num_gumbel_samples = num_gumbel_samples
-        self.value_support = DiscreteSupport(min=-model.value_support_size, max=model.value_support_size)
-        self.reward_support = DiscreteSupport(min=-model.reward_support_size, max=model.reward_support_size)
+        self.num_simulations = config.mcts.num_simulations   # MCTS rollout count
+        self.max_depth_gumbel_search = config.mcts.max_depth_gumbel_search
+        self.num_gumbel_samples = config.mcts.num_gumbel_samples
+        self.value_support = DiscreteSupport(min=-config.model.value_support_size, max=config.model.value_support_size)
+        self.reward_support = DiscreteSupport(min=-config.model.reward_support_size, max=config.model.reward_support_size)
 
         def recurrent_fn(params, rng_key, action, embedding):
             """
@@ -48,11 +47,15 @@ class MCTSPlanner:
             joint = jax.vmap(fill)(greedy_actions, action, idx) # (B, N)
 
             # Dynamics + prediction
-            next_latent, reward_logits, multi_logits, value_logits = self.model.apply(
+            model_output = self.model.apply(
                 {'params': params}, latent, joint,
                 method=self.model.recurrent_inference,
                 rngs={'dropout': rng_key}
             )
+            next_latent = model_output.hidden_state
+            reward_logits = model_output.reward_logits
+            multi_logits = model_output.policy_logits
+            value_logits = model_output.value_logits
             value= utils.support_to_scalar(value_logits, self.value_support)
             reward = utils.support_to_scalar(reward_logits, self.reward_support)
 
@@ -77,10 +80,14 @@ class MCTSPlanner:
 
     def _plan_loop(self, params, rng_key, observation):
         init_key, rng_key = jax.random.split(rng_key, 2)
-        root_latent, _, root_logits, root_value_logits = self.model.apply(
+        model_output = self.model.apply(
             {'params': params}, observation,
             rngs={'dropout': init_key}
-        )  
+        )
+        
+        root_latent = model_output.hidden_state
+        root_logits = model_output.policy_logits
+        root_value_logits = model_output.value_logits
 
         root_value = utils.support_to_scalar(root_value_logits, self.value_support)
 

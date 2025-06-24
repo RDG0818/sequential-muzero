@@ -15,7 +15,7 @@ import wandb
 class ReplayBufferActor:
     def __init__(self):
         from utils.replay_buffer import ReplayBuffer
-        self.replay_buffer = ReplayBuffer(CONFIG["replay_buffer_size"])
+        self.replay_buffer = ReplayBuffer(CONFIG.train.replay_buffer_size)
     
     def add(self, item):
         self.replay_buffer.add(item)
@@ -38,16 +38,14 @@ class LearnerActor:
         
         # Basic setup
         self.replay_buffer = replay_buffer_actor
-        N, lr = CONFIG["num_agents"], CONFIG["learning_rate"]
+        N, lr = CONFIG.train.num_agents, CONFIG.train.learning_rate
         self.rng_key = jax.random.PRNGKey(42)
         self.train_step_count = 0
 
         # env and model setup
-        env = EnvWrapper(CONFIG["env_name"], N, CONFIG["max_episode_steps"])
-        model_kwargs = {k: v for k, v in CONFIG.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
-        model_kwargs['action_space_size'] = env.action_space_size
-        self.model = FlaxMAMuZeroNet(num_agents=N, **model_kwargs)
-        
+        env = EnvWrapper(CONFIG.train.env_name, N, CONFIG.train.max_episode_steps)
+        self.model = FlaxMAMuZeroNet(CONFIG.model, env.action_space_size)
+
         # Initialize model parameters
         self.rng_key, init_key = jax.random.split(self.rng_key)
         dummy_obs = jax.numpy.ones((1, N, env.observation_size))
@@ -55,9 +53,9 @@ class LearnerActor:
 
         # Optimizer setup
         self.lr_schedule = optax.warmup_cosine_decay_schedule(
-            init_value=0.0, peak_value=lr, warmup_steps=CONFIG["lr_warmup_steps"], 
-            decay_steps=CONFIG["num_episodes"] - CONFIG["lr_warmup_steps"], end_value=lr * CONFIG["end_lr_factor"])
-        self.optimizer = optax.chain(optax.clip_by_global_norm(CONFIG["gradient_clip_norm"]), optax.adamw(learning_rate=self.lr_schedule))
+            init_value=0.0, peak_value=lr, warmup_steps=CONFIG.train.lr_warmup_steps,
+            decay_steps=CONFIG.train.num_episodes - CONFIG.train.lr_warmup_steps, end_value=lr * CONFIG.train.end_lr_factor)
+        self.optimizer = optax.chain(optax.clip_by_global_norm(CONFIG.train.gradient_clip_norm), optax.adamw(learning_rate=self.lr_schedule))
         self.opt_state = self.optimizer.init(self.params)
 
         self.jitted_train_step = jax.jit(self.train_step, static_argnames=['model', 'optimizer'])
@@ -68,38 +66,42 @@ class LearnerActor:
     def train_step(model, optimizer, params, opt_state, batch, rng_key):
         import jax
         import optax
+        U = CONFIG.train.unroll_steps
         
         def loss_fn(p):
             reward_loss, policy_loss, value_loss = 0.0, 0.0, 0.0
 
             dropout_rng, initial_rng, unroll_rng = jax.random.split(rng_key, 3)
-            unroll_keys = jax.random.split(unroll_rng, CONFIG["unroll_steps"])
+            unroll_keys = jax.random.split(unroll_rng, U)
 
-            hidden, _, p0_logits, v0_logits = model.apply(
+            model_output = model.apply(
                 {'params': p}, batch.observation,
                 rngs={'dropout': initial_rng}
             )
+
+            hidden, _, p0_logits, v0_logits = model_output.hidden_state, model_output.reward_logits, model_output.policy_logits, model_output.value_logits
 
             policy_loss += optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0, :, :]).mean()
             value_loss += optax.softmax_cross_entropy(v0_logits, batch.value_target[:, 0, :]).mean()
 
             # Unrolled Loss Calculations
-            for i in range(CONFIG["unroll_steps"]):
+            for i in range(U):
                 ai = batch.actions[:, i, :] # (B, N)
 
-                hidden, ri_logits, pi_logits, vi_logits = model.apply(
+                model_output = model.apply(
                     {'params': p},
                     hidden,     # previous latent
                     ai,         # this step’s joint action
                     method=model.recurrent_inference,
                     rngs={'dropout': unroll_keys[i]}
                 )
+                hidden, ri_logits, pi_logits, vi_logits = model_output.hidden_state, model_output.reward_logits, model_output.policy_logits, model_output.value_logits
 
                 reward_loss += optax.softmax_cross_entropy(ri_logits, batch.reward_target[:, i, :]).mean()
                 policy_loss += optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1, :, :]).mean()
                 value_loss += optax.softmax_cross_entropy(vi_logits, batch.value_target[:, i+1, :]).mean()
             
-            total_loss = reward_loss + policy_loss + value_loss * CONFIG["value_loss_coefficient"]
+            total_loss = reward_loss + policy_loss + value_loss * CONFIG.train.value_loss_coefficient
 
             metrics = {
                 "total_loss": total_loss,
@@ -123,7 +125,7 @@ class LearnerActor:
 
         # Sample a batch from the replay buffer
         self.rng_key, train_key = jax.random.split(self.rng_key)
-        numpy_batch = ray.get(self.replay_buffer.sample.remote(CONFIG["batch_size"]))
+        numpy_batch = ray.get(self.replay_buffer.sample.remote(CONFIG.train.batch_size))
         jax_batch = jax.tree_util.tree_map(lambda x: jax.device_put(x), numpy_batch)
 
         # Perform a training step
@@ -161,24 +163,21 @@ class DataActor:
         self.actor_id = actor_id
         self.learner = learner_actor
         self.replay_buffer = replay_buffer_actor
-        self.value_support = DiscreteSupport(min=-CONFIG["value_support_size"], max=CONFIG["value_support_size"])
-        self.reward_support = DiscreteSupport(min=-CONFIG["reward_support_size"], max=CONFIG["reward_support_size"])
+        self.value_support = DiscreteSupport(min=-CONFIG.model.value_support_size, max=CONFIG.model.value_support_size)
+        self.reward_support = DiscreteSupport(min=-CONFIG.model.reward_support_size, max=CONFIG.model.reward_support_size)
 
         self.params = ray.get(self.learner.get_params.remote())
         self.episodes_since_update = 0
         
         # Env and model setup
         self.rng_key = jax.random.PRNGKey(int(time.time()) + actor_id)
-        self.env_wrapper = EnvWrapper(CONFIG['env_name'], CONFIG["num_agents"], CONFIG["max_episode_steps"])
-        model_kwargs = {k: v for k, v in CONFIG.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
-        model_kwargs['action_space_size'] = self.env_wrapper.action_space_size
-        model = FlaxMAMuZeroNet(num_agents=CONFIG["num_agents"], **model_kwargs)
+        self.env_wrapper = EnvWrapper(CONFIG.train.env_name, CONFIG.train.num_agents, CONFIG.train.max_episode_steps)
+        model = FlaxMAMuZeroNet(CONFIG.model, self.env_wrapper.action_space_size)
         
         # MCTS planner setup
         planner_classes = {"independent": MCTSPlanner, "joint": MCTSJointPlanner,"sequential": MCTSSequentialPlanner}
-        if CONFIG["planner_mode"] not in planner_classes: raise ValueError(f"Invalid planner mode: {CONFIG['planner_mode']}")
-        planner_config = {"num_simulations": CONFIG["num_simulations"], "max_depth_gumbel_search": CONFIG["max_depth_gumbel_search"], "num_gumbel_samples": CONFIG["num_gumbel_samples"]}
-        planner = planner_classes[CONFIG["planner_mode"]](model=model, **planner_config)
+        if CONFIG.mcts.planner_mode not in planner_classes: raise ValueError(f"Invalid planner mode: {CONFIG.mcts.planner_mode}")
+        planner = planner_classes[CONFIG.mcts.planner_mode](model=model, config=CONFIG)
         self.plan_fn = jax.jit(planner.plan)
 
         print(f"(DataActor pid={os.getpid()}) Setup complete.")
@@ -237,7 +236,7 @@ class DataActor:
         observation = self.env_wrapper.reset()
         episode_history, episode_return = [], 0.0
 
-        for _ in range(CONFIG["max_episode_steps"]):
+        for _ in range(CONFIG.train.max_episode_steps):
             plan_output = self.plan_fn(self.params, plan_key, observation)
             action_np = np.asarray(plan_output.joint_action)
             episode_history.append({"observation": observation, "actions": action_np, "policy_target": np.asarray(plan_output.policy_targets)})
@@ -245,12 +244,12 @@ class DataActor:
             episode_return += reward
             episode_history[-1]['reward'] = reward
             if done: break
-        
-        replay_item = self.process_episode(episode_history, CONFIG["unroll_steps"], CONFIG["discount_gamma"], self.value_support, self.reward_support)
+
+        replay_item = self.process_episode(episode_history, CONFIG.train.unroll_steps, CONFIG.train.discount_gamma, self.value_support, self.reward_support)
         self.replay_buffer.add.remote(replay_item)
 
         self.episodes_since_update += 1
-        if self.episodes_since_update >= CONFIG["param_update_interval"]:
+        if self.episodes_since_update >= CONFIG.train.param_update_interval:
             self.params = ray.get(self.learner.get_params.remote())
             self.episodes_since_update = 0
         
@@ -266,8 +265,8 @@ def main():
     
     replay_buffer = ReplayBufferActor.remote()
     learner = LearnerActor.remote(replay_buffer)
-    actors = [DataActor.remote(i, learner, replay_buffer) for i in range(CONFIG["num_actors"])]
-    
+    actors = [DataActor.remote(i, learner, replay_buffer) for i in range(CONFIG.train.num_actors)]
+
     print("Waiting for actors to initialize and run one episode...")
     # This ensures the __init__ methods have completed before we proceed.
     ray.get([actor.run_episode.remote() for actor in actors]) 
@@ -276,7 +275,7 @@ def main():
     print("\nWarmup phase...")
     # Use a dictionary to map running tasks (ObjectRefs) to the actor that started them
     actor_tasks = {actor.run_episode.remote(): actor for actor in actors}
-    while ray.get(replay_buffer.get_size.remote()) < CONFIG["warmup_episodes"]:
+    while ray.get(replay_buffer.get_size.remote()) < CONFIG.train.warmup_episodes:
         # Wait for any single actor to finish its episode
         done_refs, _ = ray.wait(list(actor_tasks.keys()), num_returns=1)
         done_ref = done_refs[0]
@@ -287,19 +286,19 @@ def main():
         # Start a new episode on the same actor and add it back to our task dict
         actor_tasks[finished_actor.run_episode.remote()] = finished_actor
 
-        print(f"  Buffer size: {ray.get(replay_buffer.get_size.remote())}/{CONFIG['warmup_episodes']}", end="\r")
+        print(f"  Buffer size: {ray.get(replay_buffer.get_size.remote())}/{CONFIG.train.warmup_episodes}", end="\r")
 
     # Main Training Loop
     print("\nWarmup complete. Starting main training loop.")
     episodes_processed = ray.get(replay_buffer.get_size.remote())
-    returns = deque(maxlen=CONFIG['log_interval'])
-    losses = deque(maxlen=CONFIG['log_interval'])
+    returns = deque(maxlen=CONFIG.train.log_interval)
+    losses = deque(maxlen=CONFIG.train.log_interval)
     start_time = time.time()
     
     # Start the first training step
     learner_task = learner.train.remote()
 
-    while episodes_processed < CONFIG["num_episodes"]:
+    while episodes_processed < CONFIG.train.num_episodes:
         # Wait for any single actor to finish its episode
         done_actor_refs, _ = ray.wait(list(actor_tasks.keys()), num_returns=1)
         done_actor_ref = done_actor_refs[0]
@@ -323,7 +322,7 @@ def main():
             learner_task = learner.train.remote()
 
         # Periodic logging
-        if episodes_processed % CONFIG['log_interval'] == 0 and returns:
+        if episodes_processed % CONFIG.train.log_interval == 0 and returns:
             avg_return = np.mean(returns)
             avg_loss = np.mean(losses) if losses else 0.0
             
