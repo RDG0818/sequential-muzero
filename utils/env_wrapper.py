@@ -3,7 +3,7 @@ import jax
 import jaxmarl
 import numpy as np
 
-class JaxMARLEnvWrapper:
+class EnvWrapper:
     """
     A wrapper for JaxMARL environments to make them compatible with the existing MCTS implementation.
     """

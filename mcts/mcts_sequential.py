@@ -3,8 +3,8 @@ import jax.numpy as jnp
 import mctx
 from typing import NamedTuple
 from model.model import FlaxMAMuZeroNet
-import utils
-from utils import DiscreteSupport
+import utils.utils as utils
+from utils.utils import DiscreteSupport
 import functools
 
 class MCTSPlanOutput(NamedTuple):

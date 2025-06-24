@@ -6,7 +6,7 @@ from collections import deque
 import multiprocessing as mp
 import os
 import logging
-from replay_buffer import ReplayItem
+from utils.replay_buffer import ReplayItem
 
 from config import CONFIG
 import wandb
@@ -14,7 +14,7 @@ import wandb
 @ray.remote
 class ReplayBufferActor:
     def __init__(self):
-        from replay_buffer import ReplayBuffer
+        from utils.replay_buffer import ReplayBuffer
         self.replay_buffer = ReplayBuffer(CONFIG["replay_buffer_size"])
     
     def add(self, item):
@@ -33,7 +33,7 @@ class LearnerActor:
         import jax
         import optax
         from model.model import FlaxMAMuZeroNet
-        from jaxmarl_env_wrapper import JaxMARLEnvWrapper
+        from utils.env_wrapper import EnvWrapper
         print(f"(Learner pid={os.getpid()}) Initializing on GPU...")
         
         # Basic setup
@@ -43,7 +43,7 @@ class LearnerActor:
         self.train_step_count = 0
 
         # env and model setup
-        env = JaxMARLEnvWrapper(CONFIG["env_name"], N, CONFIG["max_episode_steps"])
+        env = EnvWrapper(CONFIG["env_name"], N, CONFIG["max_episode_steps"])
         model_kwargs = {k: v for k, v in CONFIG.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
         model_kwargs['action_space_size'] = env.action_space_size
         self.model = FlaxMAMuZeroNet(num_agents=N, **model_kwargs)
@@ -54,8 +54,10 @@ class LearnerActor:
         self.params = self.model.init(init_key, dummy_obs)['params']
 
         # Optimizer setup
-        self.lr_schedule = optax.warmup_cosine_decay_schedule(init_value=0.0, peak_value=lr, warmup_steps=5000, decay_steps=CONFIG["num_episodes"] - 5000, end_value=lr/10)
-        self.optimizer = optax.chain(optax.clip_by_global_norm(5.0), optax.adamw(learning_rate=self.lr_schedule))
+        self.lr_schedule = optax.warmup_cosine_decay_schedule(
+            init_value=0.0, peak_value=lr, warmup_steps=CONFIG["lr_warmup_steps"], 
+            decay_steps=CONFIG["num_episodes"] - CONFIG["lr_warmup_steps"], end_value=lr * CONFIG["end_lr_factor"])
+        self.optimizer = optax.chain(optax.clip_by_global_norm(CONFIG["gradient_clip_norm"]), optax.adamw(learning_rate=self.lr_schedule))
         self.opt_state = self.optimizer.init(self.params)
 
         self.jitted_train_step = jax.jit(self.train_step, static_argnames=['model', 'optimizer'])
@@ -97,7 +99,7 @@ class LearnerActor:
                 policy_loss += optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1, :, :]).mean()
                 value_loss += optax.softmax_cross_entropy(vi_logits, batch.value_target[:, i+1, :]).mean()
             
-            total_loss = reward_loss + policy_loss + value_loss
+            total_loss = reward_loss + policy_loss + value_loss * CONFIG["value_loss_coefficient"]
 
             metrics = {
                 "total_loss": total_loss,
@@ -149,8 +151,8 @@ class DataActor:
         from mcts.mcts_independent import MCTSPlanner
         from mcts.mcts_joint import MCTSJointPlanner
         from mcts.mcts_sequential import MCTSSequentialPlanner
-        from utils import DiscreteSupport
-        from jaxmarl_env_wrapper import JaxMARLEnvWrapper
+        from utils.utils import DiscreteSupport
+        from utils.env_wrapper import EnvWrapper
         from model.model import FlaxMAMuZeroNet
         
         print(f"(DataActor pid={os.getpid()}) Initializing on CPU...")
@@ -161,10 +163,13 @@ class DataActor:
         self.replay_buffer = replay_buffer_actor
         self.value_support = DiscreteSupport(min=-CONFIG["value_support_size"], max=CONFIG["value_support_size"])
         self.reward_support = DiscreteSupport(min=-CONFIG["reward_support_size"], max=CONFIG["reward_support_size"])
+
+        self.params = ray.get(self.learner.get_params.remote())
+        self.episodes_since_update = 0
         
         # Env and model setup
         self.rng_key = jax.random.PRNGKey(int(time.time()) + actor_id)
-        self.env_wrapper = JaxMARLEnvWrapper(CONFIG['env_name'], CONFIG["num_agents"], CONFIG["max_episode_steps"])
+        self.env_wrapper = EnvWrapper(CONFIG['env_name'], CONFIG["num_agents"], CONFIG["max_episode_steps"])
         model_kwargs = {k: v for k, v in CONFIG.items() if 'support' in k or 'hidden' in k or 'fc' in k or 'space' in k}
         model_kwargs['action_space_size'] = self.env_wrapper.action_space_size
         model = FlaxMAMuZeroNet(num_agents=CONFIG["num_agents"], **model_kwargs)
@@ -179,7 +184,7 @@ class DataActor:
         print(f"(DataActor pid={os.getpid()}) Setup complete.")
 
     def process_episode(self, episode_history: list, unroll_steps: int, discount_gamma: float, value_support, reward_support):
-        import utils
+        import utils.utils as utils
         import jax.numpy as jnp
         """
         Processes a completed episode to create a ReplayItem for the buffer.
@@ -227,14 +232,13 @@ class DataActor:
 
     def run_episode(self):
         import jax # Needed for jax.random
-        params = ray.get(self.learner.get_params.remote())
         
         self.rng_key, episode_key, plan_key = jax.random.split(self.rng_key, 3)
         observation = self.env_wrapper.reset()
         episode_history, episode_return = [], 0.0
 
         for _ in range(CONFIG["max_episode_steps"]):
-            plan_output = self.plan_fn(params, plan_key, observation)
+            plan_output = self.plan_fn(self.params, plan_key, observation)
             action_np = np.asarray(plan_output.joint_action)
             episode_history.append({"observation": observation, "actions": action_np, "policy_target": np.asarray(plan_output.policy_targets)})
             observation, reward, done = self.env_wrapper.step(action_np)
@@ -244,6 +248,12 @@ class DataActor:
         
         replay_item = self.process_episode(episode_history, CONFIG["unroll_steps"], CONFIG["discount_gamma"], self.value_support, self.reward_support)
         self.replay_buffer.add.remote(replay_item)
+
+        self.episodes_since_update += 1
+        if self.episodes_since_update >= CONFIG["param_update_interval"]:
+            self.params = ray.get(self.learner.get_params.remote())
+            self.episodes_since_update = 0
+        
         return episode_return
 
 

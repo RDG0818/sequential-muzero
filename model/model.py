@@ -143,13 +143,21 @@ class FlaxMAMuZeroNet(fnn.Module):
         return hidden_states, reward, policy_logits, value
 
     def recurrent_inference(self, hidden_states: jnp.ndarray, actions: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        actions_onehot = jax.nn.one_hot(actions, num_classes=self.action_space_size)
-        
-        next_hidden_states, reward = self.dynamics_net(hidden_states, actions_onehot)
-        next_policy_logits, next_value = self.prediction_net(next_hidden_states)
-        
-        return next_hidden_states, reward, next_policy_logits, next_value
-    
+        """
+        Projects a latent state forward in time using an action.
+
+        Args:
+            hidden_state (chex.Array): The current latent state. Shape: (B, N, D_hidden)
+            action (chex.Array): The joint action taken. Shape: (B, N)
+
+        Returns:
+            Tuple containing the next latent state, reward logits, policy logits, and value logits.
+        """       
+        next_hidden_states, reward_logits = self.dynamics_net(hidden_states, actions)
+        policy_logits, value_logits = self.prediction_net(next_hidden_states)
+
+        return next_hidden_states, reward_logits, policy_logits, value_logits
+
     def predict(self, hidden_states: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        policy_logits, value = self.prediction_net(hidden_states)
-        return policy_logits, value
+        policy_logits, value_logits = self.prediction_net(hidden_states)
+        return policy_logits, value_logits

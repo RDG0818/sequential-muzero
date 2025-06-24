@@ -42,30 +42,22 @@ def scalar_to_support(scalar: jnp.ndarray, support: DiscreteSupport) -> jnp.ndar
     Returns:
         A probability distribution over the support.
     """
-    # 1. Scale the scalar value using the h-transform.
+
     scaled_scalar = _h(scalar)
 
-    # 2. Clip the scaled value to be within the support range.
     clipped_scalar = jnp.clip(scaled_scalar, support.min, support.max)
-    
-    # 3. Find the integer buckets it falls between.
+
     floor = jnp.floor(clipped_scalar).astype(jnp.int32)
     ceil = jnp.ceil(clipped_scalar).astype(jnp.int32)
 
-    # 4. Calculate the probability weight for the 'ceil' bucket.
-    # The weight for the 'floor' bucket is (1 - prob).
     prob = clipped_scalar - floor
 
-    # 5. Create the one-hot like distribution.
-    # The output shape will be (*scalar.shape, support.size).
     output_shape = (*scalar.shape, support.size)
     output = jnp.zeros(output_shape)
 
-    # Distribute the probability mass to the floor and ceil buckets.
     floor_indices = (floor - support.min).astype(jnp.int32)
     ceil_indices = (ceil - support.min).astype(jnp.int32)
 
-    # Using .at[...].add(...) is safer than .set(...) if floor == ceil
     output = output.at[..., floor_indices].add(1 - prob)
     output = output.at[..., ceil_indices].add(prob)
 
@@ -88,14 +80,10 @@ def support_to_scalar(distribution: jnp.ndarray, support: DiscreteSupport, use_l
     if use_logits:
         distribution = jax.nn.softmax(distribution, axis=-1)
     
-    # 1. Create the support range tensor.
     support_range = jnp.arange(support.min, support.max + 1, dtype=jnp.float32)
-    
-    # 2. Calculate the expected value by multiplying the distribution by the support range.
-    # We broadcast support_range to match the distribution's shape.
+
     scalar = jnp.sum(distribution * jnp.broadcast_to(support_range, distribution.shape), axis=-1)
     
-    # 3. Inverse scale the value using the h-inverse transform.
     return _h_inv(scalar)
 
 

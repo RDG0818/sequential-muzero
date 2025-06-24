@@ -5,8 +5,8 @@ import mctx
 import functools
 from typing import NamedTuple
 from model.model import FlaxMAMuZeroNet
-import utils
-from utils import DiscreteSupport
+import utils.utils as utils
+from utils.utils import DiscreteSupport
 
 # Re-using the same output structure for compatibility
 class MCTSPlanOutput(NamedTuple):
