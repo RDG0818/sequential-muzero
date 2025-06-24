@@ -4,8 +4,7 @@ import flax.linen as fnn
 import jax
 import jax.numpy as jnp
 import chex
-from typing import Sequence, Tuple
-
+from typing import Sequence, Tuple, Optional
 
 class MLP(fnn.Module):
     """A simple Multi-Layer Perceptron."""
@@ -31,6 +30,27 @@ class MLP(fnn.Module):
         return x
     
 
+class BaseAttention(fnn.Module):
+    """
+    The base class for all attention mechanisms.
+    Defines the interface that attention modules must follow.
+    """
+    hidden_size: int
+
+    def __call__(self, x: jnp.ndarray, *, deterministic: bool) -> jnp.ndarray:
+        """
+        All attention modules must implement this call signature.
+
+        Args:
+            x: The input tensor. Shape: (batch, num_agents, features)
+            deterministic: A flag to control stochastic layers like dropout.
+
+        Returns:
+            An output tensor of shape (batch, num_agents, hidden_size).
+        """
+        raise NotImplementedError("Subclasses must implement the __call__ method.")
+
+
 def sinusoidal_positional_encoding(seq_len: int, d_model: int) -> chex.Array:
     """
     Generates a sinusoidal positional encoding matrix.
@@ -54,9 +74,10 @@ class TransformerEncoderLayer(fnn.Module):
     """A single layer of a Transformer encoder."""
     num_heads: int
     hidden_size: int
+    dropout_rate: float
 
     @fnn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
+    def __call__(self, x: chex.Array, *, deterministic: bool) -> chex.Array:
         """
         Forward pass for the Transformer encoder layer.
 
@@ -70,25 +91,27 @@ class TransformerEncoderLayer(fnn.Module):
         y = fnn.LayerNorm()(x)
         y = fnn.MultiHeadDotProductAttention(
             num_heads=self.num_heads,
-            qkv_features=self.hidden_size
+            qkv_features=self.hidden_size,
+            dropout_rate=self.dropout_rate,
+            deterministic=deterministic
         )(y, y)
-        x = x + y
+        x = x + fnn.Dropout(rate=self.dropout_rate)(y, deterministic=deterministic)
 
         # --- Feed-forward block ---
         y = fnn.LayerNorm()(x)
         y = MLP(layer_sizes=(self.hidden_size * 2,), output_size=self.hidden_size)(y)
-        x = x + y
+        x = x + fnn.Dropout(rate=self.dropout_rate)(y, deterministic=deterministic)
         return x
 
 
-class AttentionEncoder(fnn.Module):
+class TransformerAttentionEncoder(BaseAttention):
     """An attention-based encoder to model agent interactions."""
     num_layers: int
     num_heads: int
-    hidden_size: int
+    dropout_rate: float = 0.1  
 
     @fnn.compact
-    def __call__(self, x: chex.Array) -> chex.Array:
+    def __call__(self, x: chex.Array, *, deterministic: bool = False) -> chex.Array:
         """
         Forward pass for the attention encoder.
 
@@ -102,14 +125,15 @@ class AttentionEncoder(fnn.Module):
 
         x = fnn.Dense(features=self.hidden_size)(x)
 
-        # --- Add positional encodings for agent identity ---
         pos_encoding = sinusoidal_positional_encoding(seq_len=x.shape[1], d_model=x.shape[2])
         x = x + pos_encoding
+        x = fnn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
 
-        # --- Transformer layers ---
         for _ in range(self.num_layers):
             x = TransformerEncoderLayer(
                 num_heads=self.num_heads,
-                hidden_size=self.hidden_size
-            )(x)
+                hidden_size=self.hidden_size,
+                dropout_rate=self.dropout_rate  
+            )(x, deterministic=deterministic) 
         return x
+        

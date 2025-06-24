@@ -15,7 +15,10 @@ class ModelConfig:
     fc_reward_layers: Tuple[int, ...] = (32,)
     fc_value_layers: Tuple[int, ...] = (32,)
     fc_policy_layers: Tuple[int, ...] = (32,)
-    use_attention_in_dynamics: bool = True
+    attention_type: str = "transformer"  # "transformer" or "none"
+    attention_layers: int = 3
+    attention_heads: int = 4
+    dropout_rate: float = 0.1  
 
 @dataclass
 class MCTSConfig:

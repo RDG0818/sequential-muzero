@@ -4,8 +4,8 @@ import flax.linen as fnn
 import jax
 import jax.numpy as jnp
 import chex
-from model.attention import MLP, AttentionEncoder
-from typing import Tuple, NamedTuple
+from model.attention import MLP, BaseAttention, TransformerAttentionEncoder
+from typing import Tuple, NamedTuple, Optional
 from config import ModelConfig
 
 class MuZeroOutput(NamedTuple):
@@ -42,10 +42,8 @@ class DynamicsNetwork(fnn.Module):
     action_space_size: int
     reward_support_size: int
     fc_dynamic_layers: Tuple[int, ...]
-    fc_reward_layers: Tuple[int, ...]
-    use_attention: bool = False 
-    attention_layers: int = 3
-    attention_heads: int = 4
+    fc_reward_layers: Tuple[int, ...] 
+    attention_module: Optional[BaseAttention] = None
 
     @fnn.compact
     def __call__(self, hidden_states: chex.Array, actions: chex.Array) -> Tuple[chex.Array, chex.Array]:
@@ -68,12 +66,8 @@ class DynamicsNetwork(fnn.Module):
         # Next state prediction
         dynamic_input = jnp.concatenate([hidden_states, actions_onehot], axis=-1)
 
-        if self.use_attention:
-            agent_context = AttentionEncoder(
-                num_layers=self.attention_layers,
-                num_heads=self.attention_heads,
-                hidden_size=self.hidden_state_size
-            )(dynamic_input)
+        if self.attention_module is not None:
+            agent_context = self.attention_module(dynamic_input)
             flat_dynamic_input = agent_context.reshape(batch_size * num_agents, -1)
         else:
             flat_dynamic_input = dynamic_input.reshape(batch_size * num_agents, -1)
@@ -133,6 +127,14 @@ class FlaxMAMuZeroNet(fnn.Module):
     action_space_size: int
 
     def setup(self):
+        attention_module = None
+        if self.config.attention_type == "transformer":
+            attention_module = TransformerAttentionEncoder(
+                num_layers=self.config.attention_layers,
+                num_heads=self.config.attention_heads,
+                hidden_size=self.config.hidden_state_size,
+                dropout_rate=self.config.dropout_rate
+            )
         self.representation_net = RepresentationNetwork(
             hidden_state_size=self.config.hidden_state_size,
             fc_layers=self.config.fc_representation_layers
@@ -143,7 +145,7 @@ class FlaxMAMuZeroNet(fnn.Module):
             reward_support_size=self.config.reward_support_size,
             fc_dynamic_layers=self.config.fc_dynamic_layers,
             fc_reward_layers=self.config.fc_reward_layers,
-            use_attention=self.config.use_attention_in_dynamics
+            attention_module=attention_module
         )
         self.prediction_net = PredictionNetwork(
             action_space_size=self.action_space_size,
