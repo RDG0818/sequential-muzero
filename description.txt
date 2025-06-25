@@ -1,0 +1,34 @@
+Description of major design choices of this MARL Algorithm:
+
+Written in the JAX/FLAX framework for JIT compilation and XLA support
+Model-based, similar to MuZero for multi-agent reinforcement learning environments
+
+Utilizes a representation, dynamics, and prediction network for the world model
+Dynamics network has an optional transformer-style attention mechanism for communication
+Utilizes scalar to categorical distribution transforms for reward and value network training stability
+
+Uses the MCTX library for MuZero and Gumbel MuZero functions
+Split between independent (per agent) MCTS and joint MCTS
+
+Asynchronous training, similar to EfficientZero, using Ray framework 
+Multiple DataActors on CPU, single LearnerActor on GPU
+Loss for each network is calculated over k unroll steps
+Utilizes LR scheduler, adamw optimizer, gradient clipping, and loss scaling for training stability
+Utilizes jaxMARL for jax environments
+Uses wandb for logging
+
+Basic unit testing for all major files 
+
+To Add:
+add type hinting, proper commenting, switch to logging/coloring, etc.
+world model pretraining, fix the "starting at ep 1100" bug
+Projection network for gradient shielding and training stability
+Add more unit tests, clean up existing unit tests
+Value function using global states
+model saving/checkpointing/testing/rendering
+automated hyperparameter tuning
+Conditioned/sequential/alternating MCTS idea
+Tuning and variations of attention mechanism
+Switch to vmap and end-to-end JAX for DataActors
+Possibly utilize legal actions if provided?
+Possibly switch to hydra for hyperparmeters?

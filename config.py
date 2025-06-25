@@ -15,7 +15,7 @@ class ModelConfig:
     fc_reward_layers: Tuple[int, ...] = (32,)
     fc_value_layers: Tuple[int, ...] = (32,)
     fc_policy_layers: Tuple[int, ...] = (32,)
-    attention_type: str = "transformer"  # "transformer" or "none"
+    attention_type: str = "none"  # "transformer" or "none"
     attention_layers: int = 3
     attention_heads: int = 4
     dropout_rate: float = 0.1  
@@ -23,7 +23,7 @@ class ModelConfig:
 @dataclass
 class MCTSConfig:
     """Hyperparameters for the MCTS planner."""
-    planner_mode: str = "joint"  # "independent" or "joint"
+    planner_mode: str = "independent"  # "independent" or "joint"
     num_simulations: int = 50
     num_joint_samples: int = 16
     max_depth_gumbel_search: int = 10

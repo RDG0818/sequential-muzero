@@ -233,14 +233,14 @@ class DataActor:
         import jax # Needed for jax.random
         
         self.rng_key, episode_key, plan_key = jax.random.split(self.rng_key, 3)
-        observation = self.env_wrapper.reset()
+        observation, state = self.env_wrapper.reset()
         episode_history, episode_return = [], 0.0
 
         for _ in range(CONFIG.train.max_episode_steps):
             plan_output = self.plan_fn(self.params, plan_key, observation)
             action_np = np.asarray(plan_output.joint_action)
-            episode_history.append({"observation": observation, "actions": action_np, "policy_target": np.asarray(plan_output.policy_targets)})
-            observation, reward, done = self.env_wrapper.step(action_np)
+            episode_history.append({"observation": observation, "actions": action_np, "policy_target": np.asarray(plan_output.policy_targets), "state": state})
+            observation, state, reward, done = self.env_wrapper.step(state, action_np)
             episode_return += reward
             episode_history[-1]['reward'] = reward
             if done: break
@@ -273,17 +273,13 @@ def main():
 
     # Warmup Phase
     print("\nWarmup phase...")
-    # Use a dictionary to map running tasks (ObjectRefs) to the actor that started them
+
     actor_tasks = {actor.run_episode.remote(): actor for actor in actors}
     while ray.get(replay_buffer.get_size.remote()) < CONFIG.train.warmup_episodes:
-        # Wait for any single actor to finish its episode
         done_refs, _ = ray.wait(list(actor_tasks.keys()), num_returns=1)
         done_ref = done_refs[0]
-
-        # Get the actor that just finished
         finished_actor = actor_tasks.pop(done_ref)
         
-        # Start a new episode on the same actor and add it back to our task dict
         actor_tasks[finished_actor.run_episode.remote()] = finished_actor
 
         print(f"  Buffer size: {ray.get(replay_buffer.get_size.remote())}/{CONFIG.train.warmup_episodes}", end="\r")

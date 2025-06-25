@@ -6,6 +6,7 @@ from model.model import FlaxMAMuZeroNet
 import utils.utils as utils
 from utils.utils import DiscreteSupport
 import functools
+from config import ExperimentConfig
 
 class MCTSPlanOutput(NamedTuple):
     """Output of MCTSPlanner.plan()."""
@@ -17,45 +18,51 @@ class MCTSSequentialPlanner:
     def __init__(
         self,
         model: FlaxMAMuZeroNet,
-        num_simulations: int,
-        max_depth_gumbel_search: int,
-        num_gumbel_samples: int,
-        mode: str = 'independent',
-        num_joint_samples: int = 16
+        config: ExperimentConfig
     ):
-        # Validate planner mode
-        if mode not in ['independent', 'sequential', 'joint']:
-            raise ValueError(f"Invalid planner mode: {mode}")
 
         self.model = model
-        self.num_agents = model.num_agents        # N agents
+        self.num_agents = config.train.num_agents        # N agents
         self.action_space_size = model.action_space_size  # A actions
-        self.num_simulations = num_simulations   # MCTS rollout count
-        self.max_depth_gumbel_search = max_depth_gumbel_search
-        self.num_gumbel_samples = num_gumbel_samples
-        self.mode = mode
-        self.value_support = DiscreteSupport(min=-model.value_support_size, max=model.value_support_size)
-        self.reward_support = DiscreteSupport(min=-model.reward_support_size, max=model.reward_support_size)
+        self.num_simulations = config.mcts.num_simulations   # MCTS rollout count
+        self.max_depth_gumbel_search = config.mcts.max_depth_gumbel_search
+        self.num_gumbel_samples = config.mcts.num_gumbel_samples
+        self.value_support = DiscreteSupport(min=-config.model.value_support_size, max=config.model.value_support_size)
+        self.reward_support = DiscreteSupport(min=-config.model.reward_support_size, max=config.model.reward_support_size)
 
         def recurrent_fn(params, rng_key, action, embedding):
             """
             Batched one-step rollout for a single agent in MuZero search.
             """
-            latent, idx, factor = embedding
+            latent, idx = embedding
 
-            current_joint_action = factor.at[idx].set(action.squeeze(axis=-1))
+            # Get prior policies for all agents from the current latent state
+            prior_logits, _ = self.model.apply({'params': params}, latent, method=self.model.predict)
+            greedy_actions = jnp.argmax(prior_logits, axis=-1)  # Shape: (B, N)
+            
+            # Build joint-actions: B x N, set agent idx to action from MCTS search
+            def fill(actions_row, current_agent_action, agent_index):
+                return actions_row.at[agent_index].set(current_agent_action)
+            
+            joint = jax.vmap(fill)(greedy_actions, action, idx) # (B, N)
 
             # Dynamics + prediction
-            next_latent, reward_logits, multi_logits, value_logits = self.model.apply(
-                {'params': params}, latent, current_joint_action,
-                method=self.model.recurrent_inference
+            model_output = self.model.apply(
+                {'params': params}, latent, joint,
+                method=self.model.recurrent_inference,
+                rngs={'dropout': rng_key}
             )
+            next_latent = model_output.hidden_state
+            reward_logits = model_output.reward_logits
+            multi_logits = model_output.policy_logits
+            value_logits = model_output.value_logits
             value= utils.support_to_scalar(value_logits, self.value_support)
             reward = utils.support_to_scalar(reward_logits, self.reward_support)
 
-            prior = multi_logits[:, idx, :]
+            def pick(l_row, i): return l_row[i]
+            prior = jax.vmap(pick)(multi_logits, idx)  # (B, A)
 
-            new_embed = (next_latent, idx, current_joint_action)
+            new_embed = (next_latent, idx)
             out = mctx.RecurrentFnOutput(
                 reward=reward,
                 discount= jnp.full_like(reward, 0.99),
@@ -72,9 +79,15 @@ class MCTSSequentialPlanner:
         return self.plan_jit(params, rng_key, observation)
 
     def _plan_loop(self, params, rng_key, observation):
-        root_latent, _, root_logits, root_value_logits = self.model.apply(
-            {'params': params}, observation
-        )  
+        init_key, rng_key = jax.random.split(rng_key, 2)
+        model_output = self.model.apply(
+            {'params': params}, observation,
+            rngs={'dropout': init_key}
+        )
+        
+        root_latent = model_output.hidden_state
+        root_logits = model_output.policy_logits
+        root_value_logits = model_output.value_logits
 
         root_value = utils.support_to_scalar(root_value_logits, self.value_support)
 
@@ -82,12 +95,10 @@ class MCTSSequentialPlanner:
         keys = jax.random.split(rng_key, self.num_agents)  # (N,2)
         idxs = jnp.arange(self.num_agents, dtype=jnp.int32)     # (N,)
 
-        initial_joint_action = jnp.argmax(root_logits, axis=-1)
-
-        carry = (root_logits, root_value.reshape(-1), root_latent, initial_joint_action)
+        carry = (root_logits, root_value.reshape(-1), root_latent)
 
         def agent_step(carry, inputs):
-            logits_b, value_b, latent_b, joint_action_so_far = carry
+            logits_b, value_b, latent_b = carry
             key, agent = inputs
             # Extract agent's (1,A) prior
             p_slice = jax.lax.dynamic_slice(
@@ -97,7 +108,7 @@ class MCTSSequentialPlanner:
             )  # shape (1,1,A)
             p = p_slice.squeeze(1)
             v = value_b                              
-            emb = (latent_b, jnp.array([agent], jnp.int32), joint_action_so_far)
+            emb = (latent_b, jnp.array([agent], jnp.int32))
 
             out = mctx.gumbel_muzero_policy(
                 params=params, rng_key=key, root=mctx.RootFnOutput(prior_logits=p, value=v, embedding=emb),
@@ -105,11 +116,8 @@ class MCTSSequentialPlanner:
                 max_depth=self.max_depth_gumbel_search, max_num_considered_actions=self.num_gumbel_samples, 
                 qtransform=functools.partial(mctx.qtransform_completed_by_mix_value, use_mixed_value=True)
             )
-            
-            updated_joint_action = joint_action_so_far.at[agent].set(out.action.squeeze())
-            next_carry = (logits_b, value_b, latent_b, updated_joint_action)
 
-            return next_carry, (out.action.squeeze(0), out.action_weights.squeeze(0))
+            return carry, (out.action.squeeze(0), out.action_weights.squeeze(0))
 
         _, results = jax.lax.scan(agent_step, carry, (keys, idxs)) # Pretty much a for loop with a carry value
         actions, weights = results  
