@@ -21,14 +21,20 @@ Basic unit testing for all major files
 
 To Add:
 add type hinting, proper commenting, switch to logging/coloring, etc.
-world model pretraining, fix the "starting at ep 1100" bug
+world model pretraining
 Projection network for gradient shielding and training stability
-Add more unit tests, clean up existing unit tests
-Value function using global states
+Prioritized Experience Replay, n-step returns for value
 model saving/checkpointing/testing/rendering
+Add more unit tests, clean up existing unit tests, use logging module for unit tests
+
+Data from run_episodes -> process episodes -> replay buffer -> train_step/loss_fn
+
 automated hyperparameter tuning
+direchelet noise to root
+include state in replay buffer, more metrics return from run_episode
 Conditioned/sequential/alternating MCTS idea
 Tuning and variations of attention mechanism
 Switch to vmap and end-to-end JAX for DataActors
 Possibly utilize legal actions if provided?
 Possibly switch to hydra for hyperparmeters?
+Possibly add a network to create global state out of individual latent states?

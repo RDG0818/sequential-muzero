@@ -122,6 +122,56 @@ class PredictionNetwork(fnn.Module):
         return policy_logits, value_logits
 
 
+class ProjectionNetwork(fnn.Module):
+    """
+    A network for self-supervised learning, inspired by SimSiam.
+
+    This network consists of two sub-networks:
+    1. A projection MLP that maps hidden states to a latent projection space.
+    2. A prediction MLP (or "head") that tries to predict the projection of a
+       future state from the projection of a current state.
+    """
+    projection_hidden_dim: int
+    projection_output_dim: int
+    prediction_hidden_dim: int
+    prediction_output_dim: int
+
+    @fnn.compact
+    def __call__(self, x: chex.Array) -> chex.Array:
+        """
+        Projects the input hidden state into the latent projection space.
+
+        Args:
+            x (chex.Array): The input hidden state, typically of shape (batch_size, hidden_state_dim).
+
+        Returns:
+            chex.Array: The resulting projection.
+        """
+        
+        projection = MLP(
+            layer_sizes=[self.projection_hidden_dim],
+            output_size=self.projection_output_dim
+        )(x)
+        projection = fnn.LayerNorm()(projection)
+        return projection
+
+    def predict(self, proj: chex.Array) -> chex.Array:
+        """
+        Predicts the future state from the projected current state.
+
+        Args:
+            proj (chex.Array): The projected current state, typically of shape (batch_size, projection_output_dim).
+
+        Returns:
+            chex.Array: The predicted future state.
+        """
+        prediction = MLP(
+            layer_sizes=[self.prediction_hidden_dim],
+            output_size=self.prediction_output_dim
+        )(proj)
+        return prediction
+
+
 class FlaxMAMuZeroNet(fnn.Module):
     config: ModelConfig
     action_space_size: int
@@ -152,6 +202,12 @@ class FlaxMAMuZeroNet(fnn.Module):
             value_support_size=self.config.value_support_size,
             fc_value_layers=self.config.fc_value_layers,
             fc_policy_layers=self.config.fc_policy_layers
+        )
+        self.projection_net = ProjectionNetwork(
+            projection_hidden_dim=self.config.proj_hid,
+            projection_output_dim=self.config.proj_out,
+            prediction_hidden_dim=self.config.pred_hid,
+            prediction_output_dim=self.config.pred_out
         )
 
     def __call__(self, observations: chex.Array) -> MuZeroOutput:
@@ -214,6 +270,25 @@ class FlaxMAMuZeroNet(fnn.Module):
             value_logits=value_logits
         )
 
-    def predict(self, hidden_states: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    def predict(self, hidden_states: chex.Array) -> Tuple[chex.Array, chex.Array]:
         policy_logits, value_logits = self.prediction_net(hidden_states)
         return policy_logits, value_logits
+    
+    def project(self, hidden_state: chex.Array, with_prediction_head: bool = True) -> chex.Array:
+        """
+        Projects the hidden state into the latent space for self-supervised loss.
+        Args:
+            hidden_state (chex.Array): The latent state from the representation or dynamics network.
+            with_prediction_head (bool): If True, applies the prediction head after the
+                projection. This is used for the "online" network branch. Defaults to True.
+
+        Returns:
+            chex.Array: The final projected and optionally predicted vector.
+        """
+        proj = self.projection_net(hidden_state)
+        if with_prediction_head:
+            # This branch is for the "online" network which has gradients flowing through it
+            return self.projection_net.predict(proj)
+        else:
+            # This branch is for the "target" network, gradients will be stopped later
+            return proj

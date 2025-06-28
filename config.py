@@ -18,12 +18,16 @@ class ModelConfig:
     attention_type: str = "none"  # "transformer" or "none"
     attention_layers: int = 3
     attention_heads: int = 4
-    dropout_rate: float = 0.1  
+    dropout_rate: float = 0.1
+    proj_hid: int = 256
+    proj_out: int = 256
+    pred_hid: int = 64
+    pred_out: int = 256
 
 @dataclass
 class MCTSConfig:
     """Hyperparameters for the MCTS planner."""
-    planner_mode: str = "independent"  # "independent" or "joint"
+    planner_mode: str = "joint"  # "independent" or "joint"
     num_simulations: int = 50
     num_joint_samples: int = 16
     max_depth_gumbel_search: int = 10
@@ -45,9 +49,11 @@ class TrainConfig:
     param_update_interval: int = 10
     end_lr_factor: float = 0.1
     lr_warmup_steps: int = 5000
-    value_loss_coefficient: float = 0.5
+    value_loss_coefficient: float = 1.0
+    consistency_coeff: float = 1.0
     gradient_clip_norm: float = 5.0
     unroll_steps: int = 5
+    n_step : int = 1
     discount_gamma: float = 0.99
 
 @dataclass

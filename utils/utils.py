@@ -32,36 +32,30 @@ def _h_inv(x: jnp.ndarray, epsilon: float = 1e-3) -> jnp.ndarray:
 
 def scalar_to_support(scalar: jnp.ndarray, support: DiscreteSupport) -> jnp.ndarray:
     """
-    Transforms a scalar value into a categorical representation (a probability distribution).
-    This is the equivalent of the `_phi` function.
-
-    Args:
-        scalar: The scalar value(s) to transform. Can be a single value or a batch.
-        support: A DiscreteSupport object defining the range of the distribution.
-
-    Returns:
-        A probability distribution over the support.
+    A JIT-compatible function to transform a scalar value into a categorical distribution.
     """
-
+    # Apply the MuZero scaling function
     scaled_scalar = _h(scalar)
-
     clipped_scalar = jnp.clip(scaled_scalar, support.min, support.max)
 
+    # Calculate the floor and ceiling and the probability for weighting
     floor = jnp.floor(clipped_scalar).astype(jnp.int32)
     ceil = jnp.ceil(clipped_scalar).astype(jnp.int32)
-
     prob = clipped_scalar - floor
 
-    output_shape = (*scalar.shape, support.size)
-    output = jnp.zeros(output_shape)
-
+    # --- JIT-Safe Implementation ---
+    # Create one-hot encodings for the floor and ceil indices
     floor_indices = (floor - support.min).astype(jnp.int32)
     ceil_indices = (ceil - support.min).astype(jnp.int32)
+    
+    floor_one_hot = jax.nn.one_hot(floor_indices, num_classes=support.size)
+    ceil_one_hot = jax.nn.one_hot(ceil_indices, num_classes=support.size)
 
-    output = output.at[..., floor_indices].add(1 - prob)
-    output = output.at[..., ceil_indices].add(prob)
-
-    return output
+    # Create the distribution by weighting the one-hot vectors
+    # (1 - prob) goes to the floor, and prob goes to the ceil
+    distribution = floor_one_hot * (1 - prob)[..., None] + ceil_one_hot * prob[..., None]
+    
+    return distribution
 
 
 def support_to_scalar(distribution: jnp.ndarray, support: DiscreteSupport, use_logits: bool = True) -> jnp.ndarray:

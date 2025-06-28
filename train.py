@@ -6,7 +6,9 @@ from collections import deque
 import multiprocessing as mp
 import os
 import logging
-from utils.replay_buffer import ReplayItem
+from typing import List, TYPE_CHECKING
+if TYPE_CHECKING:
+    from utils.replay_buffer import Episode, Transition, ReplayItem
 
 from config import CONFIG
 import wandb
@@ -16,10 +18,10 @@ class ReplayBufferActor:
     def __init__(self):
         from utils.replay_buffer import ReplayBuffer
         self.replay_buffer = ReplayBuffer(CONFIG.train.replay_buffer_size)
-    
-    def add(self, item):
-        self.replay_buffer.add(item)
-    
+
+    def add_batch(self, items: list["ReplayItem"]):
+        self.replay_buffer.add_batch(items)
+
     def get_size(self):
         return len(self.replay_buffer)
     
@@ -32,6 +34,7 @@ class LearnerActor:
     def __init__(self, replay_buffer_actor):
         import jax
         import optax
+        from utils.utils import DiscreteSupport
         from model.model import FlaxMAMuZeroNet
         from utils.env_wrapper import EnvWrapper
         print(f"(Learner pid={os.getpid()}) Initializing on GPU...")
@@ -41,6 +44,8 @@ class LearnerActor:
         N, lr = CONFIG.train.num_agents, CONFIG.train.learning_rate
         self.rng_key = jax.random.PRNGKey(42)
         self.train_step_count = 0
+        self.value_support = DiscreteSupport(min=-CONFIG.model.value_support_size, max=CONFIG.model.value_support_size)
+        self.reward_support = DiscreteSupport(min=-CONFIG.model.reward_support_size, max=CONFIG.model.reward_support_size)
 
         # env and model setup
         env = EnvWrapper(CONFIG.train.env_name, N, CONFIG.train.max_episode_steps)
@@ -58,15 +63,21 @@ class LearnerActor:
         self.optimizer = optax.chain(optax.clip_by_global_norm(CONFIG.train.gradient_clip_norm), optax.adamw(learning_rate=self.lr_schedule))
         self.opt_state = self.optimizer.init(self.params)
 
-        self.jitted_train_step = jax.jit(self.train_step, static_argnames=['model', 'optimizer'])
-        
+        self.jitted_train_step = jax.jit(self.train_step, static_argnames=['model', 'optimizer', 'value_support', 'reward_support'])
+
         print(f"(Learner pid={os.getpid()}) Setup complete.")
 
     @staticmethod
-    def train_step(model, optimizer, params, opt_state, batch, rng_key):
+    def train_step(model, optimizer, params, opt_state, batch, rng_key, value_support, reward_support):
         import jax
+        import jax.numpy as jnp
         import optax
+        from utils import utils
+
         U = CONFIG.train.unroll_steps
+
+        value_target_dist = utils.scalar_to_support(batch.value_target.mean(axis=2), value_support)
+        reward_target_dist = utils.scalar_to_support(batch.reward_target.mean(axis=2), reward_support)
         
         def loss_fn(p):
             reward_loss, policy_loss, value_loss = 0.0, 0.0, 0.0
@@ -74,19 +85,21 @@ class LearnerActor:
             dropout_rng, initial_rng, unroll_rng = jax.random.split(rng_key, 3)
             unroll_keys = jax.random.split(unroll_rng, U)
 
+            reshaped_obs = batch.observation[:, 0]
+
             model_output = model.apply(
-                {'params': p}, batch.observation,
+                {'params': p}, reshaped_obs,
                 rngs={'dropout': initial_rng}
             )
 
             hidden, _, p0_logits, v0_logits = model_output.hidden_state, model_output.reward_logits, model_output.policy_logits, model_output.value_logits
 
-            policy_loss += optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0, :, :]).mean()
-            value_loss += optax.softmax_cross_entropy(v0_logits, batch.value_target[:, 0, :]).mean()
+            policy_loss += optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0]).mean()
+            value_loss += utils.categorical_cross_entropy_loss(v0_logits, value_target_dist[:, 0]).mean()
 
             # Unrolled Loss Calculations
             for i in range(U):
-                ai = batch.actions[:, i, :] # (B, N)
+                ai = batch.actions[:, i] # (B, N)
 
                 model_output = model.apply(
                     {'params': p},
@@ -97,10 +110,16 @@ class LearnerActor:
                 )
                 hidden, ri_logits, pi_logits, vi_logits = model_output.hidden_state, model_output.reward_logits, model_output.policy_logits, model_output.value_logits
 
-                reward_loss += optax.softmax_cross_entropy(ri_logits, batch.reward_target[:, i, :]).mean()
-                policy_loss += optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1, :, :]).mean()
-                value_loss += optax.softmax_cross_entropy(vi_logits, batch.value_target[:, i+1, :]).mean()
+                reward_loss += utils.categorical_cross_entropy_loss(ri_logits, reward_target_dist[:, i]).mean()
+                policy_loss += optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1]).mean()
+                value_loss += utils.categorical_cross_entropy_loss(vi_logits, value_target_dist[:, i+1]).mean()
+
+                # TODO: Add the SimSiam/Consistency loss here 
             
+            policy_loss /= (U + 1)
+            value_loss /= (U + 1)
+            reward_loss /= (U + 1e-8)
+
             total_loss = reward_loss + policy_loss + value_loss * CONFIG.train.value_loss_coefficient
 
             metrics = {
@@ -129,7 +148,8 @@ class LearnerActor:
         jax_batch = jax.tree_util.tree_map(lambda x: jax.device_put(x), numpy_batch)
 
         # Perform a training step
-        self.params, self.opt_state, metrics = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch, train_key)
+        self.params, self.opt_state, metrics = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch, train_key, 
+                                                                      self.value_support, self.reward_support)
         self.train_step_count += 1
 
         # Convert metrics to standard Python types for logging
@@ -153,7 +173,6 @@ class DataActor:
         from mcts.mcts_independent import MCTSPlanner
         from mcts.mcts_joint import MCTSJointPlanner
         from mcts.mcts_sequential import MCTSSequentialPlanner
-        from utils.utils import DiscreteSupport
         from utils.env_wrapper import EnvWrapper
         from model.model import FlaxMAMuZeroNet
         
@@ -163,8 +182,6 @@ class DataActor:
         self.actor_id = actor_id
         self.learner = learner_actor
         self.replay_buffer = replay_buffer_actor
-        self.value_support = DiscreteSupport(min=-CONFIG.model.value_support_size, max=CONFIG.model.value_support_size)
-        self.reward_support = DiscreteSupport(min=-CONFIG.model.reward_support_size, max=CONFIG.model.reward_support_size)
 
         self.params = ray.get(self.learner.get_params.remote())
         self.episodes_since_update = 0
@@ -182,78 +199,100 @@ class DataActor:
 
         print(f"(DataActor pid={os.getpid()}) Setup complete.")
 
-    def process_episode(self, episode_history: list, unroll_steps: int, discount_gamma: float, value_support, reward_support):
-        import utils.utils as utils
-        import jax.numpy as jnp
+    def process_episode(
+        self,
+        episode: "Episode",
+        unroll_steps: int,
+        n_step: int,  # How many steps into the future to bootstrap the value from
+        discount_gamma: float
+    ) -> List["ReplayItem"]:
         """
-        Processes a completed episode to create a ReplayItem for the buffer.
+        Processes a completed episode to create a list of valid, fixed-length training samples.
         """
-        observations = [step["observation"] for step in episode_history]
-        actions = [step["actions"] for step in episode_history]
-        policy_targets = [step["policy_target"] for step in episode_history]
-        rewards = [step["reward"] for step in episode_history]
+        from utils.replay_buffer import ReplayItem
+        replay_items = []
 
-        discounted_returns = []
-        current_return = 0.0
-        for r in reversed(rewards):
-            current_return = r + discount_gamma * current_return
-            discounted_returns.append(current_return)
-        discounted_returns.reverse()
+        for start_index in range(len(episode.trajectory)):
+            unroll_window = episode.trajectory[start_index : start_index + unroll_steps]
+            full_target_window = episode.trajectory[start_index : start_index + unroll_steps + 1]
 
-        def pad_or_clip(sequence: list, length: int, pad_value):
-            """Pads or clips a list to a target length."""
-            if len(sequence) >= length:
-                return sequence[:length]
+            if len(full_target_window) < unroll_steps + 1:
+                break 
 
-            padding = [pad_value] * (length - len(sequence))
-            return sequence + padding
-        
-        actions_padded = pad_or_clip(actions, unroll_steps, pad_value=actions[-1])
-        policy_targets_padded = pad_or_clip(policy_targets, unroll_steps + 1, pad_value=policy_targets[-1])
-        rewards_padded = pad_or_clip(rewards, unroll_steps, pad_value=0.0)
-        returns_padded = pad_or_clip(discounted_returns, unroll_steps + 1, pad_value=0.0)
+            initial_observation = unroll_window[0].observation
+            actions = np.array([t.action for t in unroll_window])
+            policy_targets = np.array([t.policy_target for t in full_target_window])
+            rewards = [t.reward for t in unroll_window]
+            reward_targets = np.array([np.full((CONFIG.train.num_agents,), r) for r in rewards], dtype=np.float32)
+            target_obs = unroll_window[-1].observation
+            
+            value_targets = []
+            for i in range(unroll_steps + 1):
+                target_step_index = start_index + i
+                n_step_reward_window = episode.trajectory[target_step_index : target_step_index + n_step]
+                
+                n_step_reward_sum = sum(
+                    t.reward * (discount_gamma ** j) for j, t in enumerate(n_step_reward_window)
+                )
 
-        actions_arr = np.stack(actions_padded, axis=0)
-        policy_targets_arr = np.stack(policy_targets_padded, axis=0)
-        rewards_arr = np.array(rewards_padded, dtype=np.float32)
-        returns_arr = np.array(returns_padded, dtype=np.float32)
+                bootstrap_index = target_step_index + n_step
+                if bootstrap_index < len(episode.trajectory):
+                    bootstrap_value = (episode.trajectory[bootstrap_index].value_target * (discount_gamma ** n_step))
+                else:
+                    bootstrap_value = 0.0
+                
+                final_value_target = n_step_reward_sum + bootstrap_value
+                decentralized_target = np.full((CONFIG.train.num_agents,), final_value_target)
+                value_targets.append(decentralized_target)
+            
+            value_targets = np.array(value_targets, dtype=np.float32)
 
-        value_target_dist = utils.scalar_to_support(jnp.asarray(returns_arr), value_support)
-        reward_target_dist = utils.scalar_to_support(jnp.asarray(rewards_arr), reward_support)
-
-        return ReplayItem(
-            observation=observations[0],
-            actions=actions_arr,
-            policy_target=policy_targets_arr,
-            value_target=np.asarray(value_target_dist),
-            reward_target=np.asarray(reward_target_dist)
+            replay_items.append(
+                ReplayItem(
+                observation=initial_observation,
+                actions=actions,
+                target_observation=target_obs,
+                policy_target=policy_targets,
+                value_target=value_targets, 
+                reward_target=reward_targets
+            )
         )
 
+        return replay_items
+
     def run_episode(self):
-        import jax # Needed for jax.random
+        """ Runs a single episode, collects data, and updates the replay buffer."""
+        import jax
+        from utils.replay_buffer import Episode, Transition
         
-        self.rng_key, episode_key, plan_key = jax.random.split(self.rng_key, 3)
         observation, state = self.env_wrapper.reset()
-        episode_history, episode_return = [], 0.0
+        episode = Episode()
 
         for _ in range(CONFIG.train.max_episode_steps):
+            self.rng_key, plan_key = jax.random.split(self.rng_key, 2)
             plan_output = self.plan_fn(self.params, plan_key, observation)
             action_np = np.asarray(plan_output.joint_action)
-            episode_history.append({"observation": observation, "actions": action_np, "policy_target": np.asarray(plan_output.policy_targets), "state": state})
-            observation, state, reward, done = self.env_wrapper.step(state, action_np)
-            episode_return += reward
-            episode_history[-1]['reward'] = reward
+            next_observation, next_state, reward, done = self.env_wrapper.step(state, action_np)
+            episode.add_step(Transition(observation, action_np, reward, done, np.asarray(plan_output.policy_targets), plan_output.root_value))
+            observation = next_observation
+            state = next_state
             if done: break
 
-        replay_item = self.process_episode(episode_history, CONFIG.train.unroll_steps, CONFIG.train.discount_gamma, self.value_support, self.reward_support)
-        self.replay_buffer.add.remote(replay_item)
+        replay_items = self.process_episode(
+            episode,
+            CONFIG.train.unroll_steps,
+            CONFIG.train.n_step,
+            CONFIG.train.discount_gamma, 
+        )
+
+        if replay_items: self.replay_buffer.add_batch.remote(replay_items)
 
         self.episodes_since_update += 1
         if self.episodes_since_update >= CONFIG.train.param_update_interval:
             self.params = ray.get(self.learner.get_params.remote())
             self.episodes_since_update = 0
         
-        return episode_return
+        return episode.episode_return
 
 
 def main():
@@ -286,7 +325,7 @@ def main():
 
     # Main Training Loop
     print("\nWarmup complete. Starting main training loop.")
-    episodes_processed = ray.get(replay_buffer.get_size.remote())
+    episodes_processed = 0
     returns = deque(maxlen=CONFIG.train.log_interval)
     losses = deque(maxlen=CONFIG.train.log_interval)
     start_time = time.time()
