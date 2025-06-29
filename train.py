@@ -5,11 +5,10 @@ import numpy as np
 from collections import deque
 import multiprocessing as mp
 import os
-import logging
-from typing import List, TYPE_CHECKING
+from typing import List, Dict, Callable, TYPE_CHECKING
 if TYPE_CHECKING:
-    from utils.replay_buffer import Episode, Transition, ReplayItem
-
+    from utils.replay_buffer import Episode, ReplayItem
+from utils.logging_utils import logger
 from config import CONFIG
 import wandb
 
@@ -164,27 +163,37 @@ class LearnerActor:
 
 @ray.remote(num_cpus=1)
 class DataActor:
+    """
+    A Ray remote actor responsible for generating game experience.
+
+    This actor runs in a separate process on a CPU. It continuously plays episodes
+    of the game, processes the trajectories into training samples, and sends
+    them to a central replay buffer. It periodically updates its model parameters
+    from the main learner.
+    """
     def __init__(self, actor_id, learner_actor, replay_buffer_actor):
         # Force CPU usage for this actor
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
         os.environ['JAX_PLATFORMS'] = 'cpu'
         
         import jax
+        import chex
+        import logging
         from mcts.mcts_independent import MCTSPlanner
         from mcts.mcts_joint import MCTSJointPlanner
         from mcts.mcts_sequential import MCTSSequentialPlanner
         from utils.env_wrapper import EnvWrapper
         from model.model import FlaxMAMuZeroNet
         
-        print(f"(DataActor pid={os.getpid()}) Initializing on CPU...")
+        logger.info("Initializing on CPU...")
 
         # Basic setup
-        self.actor_id = actor_id
+        self.actor_id: int = actor_id
         self.learner = learner_actor
         self.replay_buffer = replay_buffer_actor
 
-        self.params = ray.get(self.learner.get_params.remote())
-        self.episodes_since_update = 0
+        self.params: chex.Array = ray.get(self.learner.get_params.remote())
+        self.episodes_since_update: int = 0
         
         # Env and model setup
         self.rng_key = jax.random.PRNGKey(int(time.time()) + actor_id)
@@ -197,71 +206,90 @@ class DataActor:
         planner = planner_classes[CONFIG.mcts.planner_mode](model=model, config=CONFIG)
         self.plan_fn = jax.jit(planner.plan)
 
-        print(f"(DataActor pid={os.getpid()}) Setup complete.")
+        logger.info("Setup complete.")
 
     def process_episode(
         self,
         episode: "Episode",
         unroll_steps: int,
-        n_step: int,  # How many steps into the future to bootstrap the value from
+        n_step: int,  
         discount_gamma: float
     ) -> List["ReplayItem"]:
         """
-        Processes a completed episode to create a list of valid, fixed-length training samples.
+        Processes a completed episode using a sliding window to create training samples.
+
+        This version includes minor optimizations by vectorizing the data extraction
+        before entering the main loop.
+
+        Args:
+            episode: The completed episode object.
+            unroll_steps: The number of steps to unroll for each sample.
+            n_step: The number of future steps to use for value bootstrapping.
+            discount_gamma: The discount factor for future rewards.
+
+        Returns:
+            A list of fully-formed ReplayItem objects ready for training.
         """
         from utils.replay_buffer import ReplayItem
+        import numpy as np
+
         replay_items = []
+        trajectory = episode.trajectory
+        ep_len = len(trajectory)
 
-        for start_index in range(len(episode.trajectory)):
-            unroll_window = episode.trajectory[start_index : start_index + unroll_steps]
-            full_target_window = episode.trajectory[start_index : start_index + unroll_steps + 1]
+        observations = np.stack([t.observation for t in trajectory])
+        actions = np.stack([t.action for t in trajectory])
+        policy_targets = np.stack([t.policy_target for t in trajectory])
+        rewards = np.array([t.reward for t in trajectory], dtype=np.float32)
+        mcts_values = np.array([t.value_target for t in trajectory], dtype=np.float32)
 
-            if len(full_target_window) < unroll_steps + 1:
-                break 
+        for start_index in range(ep_len - unroll_steps):
+            unroll_slice = slice(start_index, start_index + unroll_steps)
+            full_slice = slice(start_index, start_index + unroll_steps + 1)
 
-            initial_observation = unroll_window[0].observation
-            actions = np.array([t.action for t in unroll_window])
-            policy_targets = np.array([t.policy_target for t in full_target_window])
-            rewards = [t.reward for t in unroll_window]
-            reward_targets = np.array([np.full((CONFIG.train.num_agents,), r) for r in rewards], dtype=np.float32)
-            target_obs = unroll_window[-1].observation
-            
-            value_targets = []
+            value_scalars = []
             for i in range(unroll_steps + 1):
                 target_step_index = start_index + i
-                n_step_reward_window = episode.trajectory[target_step_index : target_step_index + n_step]
+                n_step_reward_window = rewards[target_step_index : target_step_index + n_step]
                 
                 n_step_reward_sum = sum(
-                    t.reward * (discount_gamma ** j) for j, t in enumerate(n_step_reward_window)
+                    reward * (discount_gamma ** j) for j, reward in enumerate(n_step_reward_window)
                 )
 
                 bootstrap_index = target_step_index + n_step
-                if bootstrap_index < len(episode.trajectory):
-                    bootstrap_value = (episode.trajectory[bootstrap_index].value_target * (discount_gamma ** n_step))
+                if bootstrap_index < ep_len:
+                    bootstrap_value = mcts_values[bootstrap_index] * (discount_gamma ** n_step)
                 else:
                     bootstrap_value = 0.0
                 
-                final_value_target = n_step_reward_sum + bootstrap_value
-                decentralized_target = np.full((CONFIG.train.num_agents,), final_value_target)
-                value_targets.append(decentralized_target)
-            
-            value_targets = np.array(value_targets, dtype=np.float32)
+                final_value_scalar = n_step_reward_sum + bootstrap_value
+                value_scalars.append(final_value_scalar)
+
+            decentralized_value_targets = np.array([np.full((CONFIG.train.num_agents,), v) for v in value_scalars], dtype=np.float32)
+            decentralized_reward_targets = np.array([np.full((CONFIG.train.num_agents,), r) for r in rewards[unroll_slice]], dtype=np.float32)
 
             replay_items.append(
                 ReplayItem(
-                observation=initial_observation,
-                actions=actions,
-                target_observation=target_obs,
-                policy_target=policy_targets,
-                value_target=value_targets, 
-                reward_target=reward_targets
+                    observation=observations[start_index],
+                    actions=actions[unroll_slice],
+                    target_observation=observations[start_index + unroll_steps],
+                    policy_target=policy_targets[full_slice],
+                    value_target=decentralized_value_targets,
+                    reward_target=decentralized_reward_targets
+                )
             )
-        )
-
         return replay_items
+    
+    def run_episode(self) -> float:
+        """
+        Runs a single episode, processes it, and sends the data to the replay buffer.
 
-    def run_episode(self):
-        """ Runs a single episode, collects data, and updates the replay buffer."""
+        This method also handles periodically updating its model parameters from the
+        central learner.
+
+        Returns:
+            The total undiscounted return of the completed episode.
+        """
         import jax
         from utils.replay_buffer import Episode, Transition
         
@@ -285,10 +313,12 @@ class DataActor:
             CONFIG.train.discount_gamma, 
         )
 
+
         if replay_items: self.replay_buffer.add_batch.remote(replay_items)
 
         self.episodes_since_update += 1
         if self.episodes_since_update >= CONFIG.train.param_update_interval:
+            logger.debug("Updating parameters from learner.")
             self.params = ray.get(self.learner.get_params.remote())
             self.episodes_since_update = 0
         
@@ -313,6 +343,8 @@ def main():
     # Warmup Phase
     print("\nWarmup phase...")
 
+    start_time = time.time()
+
     actor_tasks = {actor.run_episode.remote(): actor for actor in actors}
     while ray.get(replay_buffer.get_size.remote()) < CONFIG.train.warmup_episodes:
         done_refs, _ = ray.wait(list(actor_tasks.keys()), num_returns=1)
@@ -324,7 +356,8 @@ def main():
         print(f"  Buffer size: {ray.get(replay_buffer.get_size.remote())}/{CONFIG.train.warmup_episodes}", end="\r")
 
     # Main Training Loop
-    print("\nWarmup complete. Starting main training loop.")
+    end_time = time.time()
+    print(f"\nWarmup complete. Time Taken {end_time - start_time:.2f} seconds. Starting main training loop.")
     episodes_processed = 0
     returns = deque(maxlen=CONFIG.train.log_interval)
     losses = deque(maxlen=CONFIG.train.log_interval)
