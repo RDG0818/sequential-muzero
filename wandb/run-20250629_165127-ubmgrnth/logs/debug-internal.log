@@ -1,0 +1,7 @@
+{"time":"2025-06-29T16:51:27.790091869-05:00","level":"INFO","msg":"stream: starting","core version":"0.20.1","symlink path":"/home/ryan/toy_mazero/wandb/run-20250629_165127-ubmgrnth/logs/debug-core.log"}
+{"time":"2025-06-29T16:51:28.152397597-05:00","level":"INFO","msg":"stream: created new stream","id":"ubmgrnth"}
+{"time":"2025-06-29T16:51:28.152476136-05:00","level":"INFO","msg":"stream: started","id":"ubmgrnth"}
+{"time":"2025-06-29T16:51:28.152542155-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"ubmgrnth"}
+{"time":"2025-06-29T16:51:28.152567355-05:00","level":"INFO","msg":"sender: started","stream_id":"ubmgrnth"}
+{"time":"2025-06-29T16:51:28.152600393-05:00","level":"INFO","msg":"handler: started","stream_id":"ubmgrnth"}
+{"time":"2025-06-29T16:51:28.323369087-05:00","level":"INFO","msg":"Starting system monitor"}

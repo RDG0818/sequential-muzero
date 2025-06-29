@@ -3,7 +3,7 @@ from collections import deque
 import random
 import numpy as np 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Tuple
 from jax import tree_util
 
 @dataclass
@@ -38,7 +38,7 @@ class ReplayItem:
     """
 
     observation: np.ndarray
-    actions: np.ndarray  # Shape: (unroll_steps, num_actions)
+    actions: np.ndarray  # Shape: (unroll_steps, action_space_size)
     target_observation: np.ndarray
     policy_target: np.ndarray    # Shape: (unroll_steps + 1, action_space_size)
     value_target: np.ndarray     # Shape: (unroll_steps + 1,)
@@ -82,23 +82,113 @@ tree_util.register_pytree_node(
 )
 
 class ReplayBuffer:
-    def __init__(self, capacity):
-        self.buffer = deque(maxlen=capacity)
-    
-    def add_batch(self, items: list[ReplayItem]):
-        self.buffer.extend(items)
-    
-    def __len__(self):
-        return len(self.buffer)
-    
-    def sample(self, batch_size: int) -> ReplayItem:
-        batch = random.sample(self.buffer, batch_size)
+    """
+    A replay buffer with prioritized experience replay.
+    """
+    def __init__(self, capacity: int, observation_space: Tuple, action_space_size: int, num_agents: int, unroll_steps: int,
+                 alpha: float, beta_start: float, beta_frames: int):
+        """
+        Initializes the ReplayBuffer.
+        Args:
+            capacity: The maximum number of items to store in the buffer.
+            observation_space: The shape of a single observation.
+            num_agents: The number of agents
+            unroll_steps: The number of steps to unroll for each training sample.
+            alpha: The exponent for calculating priorities. 0 means uniform sampling.
+            beta_start: The initial value of beta for importance sampling.
+            beta_frames: The number of frames over which to anneal beta to 1.0.
+        """
+        self.capacity = capacity
+        self.alpha = alpha
+        self.beta_start = beta_start
+        self.beta_frames = beta_frames
+        self.frame_count = 0
 
-        return ReplayItem(
-            observation=np.stack([item.observation for item in batch], axis=0),
-            actions=np.stack([item.actions for item in batch], axis=0),
-            target_observation=np.stack([item.target_observation for item in batch], axis=0),
-            policy_target=np.stack([item.policy_target for item in batch], axis=0),
-            value_target=np.stack([item.value_target for item in batch], axis=0),
-            reward_target=np.stack([item.reward_target for item in batch], axis=0)
+        self.observations = np.zeros((capacity, num_agents, *observation_space), dtype=np.float32)
+        self.actions = np.zeros((capacity, unroll_steps, num_agents), dtype=np.int32)
+        self.target_observations = np.zeros((capacity, *observation_space), dtype=np.float32)
+        self.policy_targets = np.zeros((capacity, unroll_steps + 1, num_agents, action_space_size), dtype=np.float32)
+        self.value_targets = np.zeros((capacity, unroll_steps + 1, num_agents), dtype=np.float32)
+        self.reward_targets = np.zeros((capacity, unroll_steps, num_agents), dtype=np.float32)
+
+        self.priorities = np.zeros(capacity, dtype=np.float32)
+        self.pointer = 0
+        self.size = 0
+
+    def add(self, item: ReplayItem, priority: float):
+        """
+        Adds a new ReplayItem to the buffer.
+        Args:
+            item: The ReplayItem to add.
+            priority: The initial priority for the item.
+        """
+        self.observations[self.pointer] = item.observation
+        self.actions[self.pointer] = item.actions
+        self.target_observations[self.pointer] = item.target_observation
+        self.policy_targets[self.pointer] = item.policy_target
+        self.value_targets[self.pointer] = item.value_target
+        self.reward_targets[self.pointer] = item.reward_target
+        self.priorities[self.pointer] = priority
+
+        self.pointer = (self.pointer + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
+
+    def _get_beta(self) -> float:
+        """Calculates the current value of beta."""
+        beta = self.beta_start + self.frame_count * (1.0 - self.beta_start) / self.beta_frames
+        self.frame_count += 1
+        return min(1.0, beta)
+
+    def sample(self, batch_size: int) -> Tuple[ReplayItem, np.ndarray, np.ndarray]:
+        """
+        Samples a batch of ReplayItems from the buffer using prioritized sampling.
+        Args:
+            batch_size: The number of items to sample.
+        Returns:
+            A tuple containing:
+                - A ReplayItem containing the batched data.
+                - The importance sampling weights for the batch.
+                - The indices of the sampled items.
+        """
+        if self.size == 0:
+            return None, None, None
+
+        priorities = self.priorities[:self.size]
+        probs = priorities ** self.alpha
+        probs /= probs.sum()
+
+        indices = np.random.choice(self.size, batch_size, p=probs)
+        beta = self._get_beta()
+        weights = (self.size * probs[indices]) ** (-beta)
+        weights /= weights.max()
+
+        # B = batch_size
+        # U = unroll_steps
+        # O = observation_shape 
+        # A = action_space_size
+        # N = number of agents
+        # value = dimension of the value (typically 1)
+        # reward = dimension of the reward (typically 1)
+
+        batch = ReplayItem(
+            observation=self.observations[indices], # Shape: (B, *O)
+            actions=self.actions[indices], # Shape: (B, U, A)
+            target_observation=self.target_observations[indices], # Shape: (B, *O)
+            policy_target=self.policy_targets[indices], # Shape: (B, U+1, A)
+            value_target=self.value_targets[indices], # Shape (B, U+1, N, value)
+            reward_target=self.reward_targets[indices] # Shape (B, U, N, reward)
         )
+
+        return batch, weights, indices
+
+    def update_priorities(self, indices: np.ndarray, priorities: np.ndarray):
+        """
+        Updates the priorities of the sampled items.
+        Args:
+            indices: The indices of the items to update.
+            priorities: The new priorities for the items.
+        """
+        self.priorities[indices] = priorities
+
+    def __len__(self):
+        return self.size

@@ -29,7 +29,6 @@ class MCTSConfig:
     """Hyperparameters for the MCTS planner."""
     planner_mode: str = "joint"  # "independent" or "joint"
     num_simulations: int = 50
-    num_joint_samples: int = 16
     max_depth_gumbel_search: int = 10
     num_gumbel_samples: int = 10
 
@@ -38,22 +37,25 @@ class TrainConfig:
     """Hyperparameters for the training process."""
     env_name: str = "MPE_simple_spread_v3"
     num_agents: int = 3
-    num_episodes: int = 500000
+    num_episodes: int = 100000
     warmup_episodes: int = 1000
     log_interval: int = 100
     num_actors: int = 6
     max_episode_steps: int = 25
-    replay_buffer_size: int = 20000
+    replay_buffer_size: int = 100000
+    replay_buffer_alpha: float = 0.6
+    replay_buffer_beta_start: float = 0.4
+    replay_buffer_beta_frames: float = 100000
     batch_size: int = 256
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-4
     param_update_interval: int = 10
     end_lr_factor: float = 0.1
     lr_warmup_steps: int = 5000
-    value_loss_coefficient: float = 1.0
+    value_loss_coefficient: float = 0.25
     consistency_coeff: float = 1.0
     gradient_clip_norm: float = 5.0
     unroll_steps: int = 5
-    n_step : int = 1
+    n_step : int = 10
     discount_gamma: float = 0.99
 
 @dataclass

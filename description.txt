@@ -13,6 +13,7 @@ Split between independent (per agent) MCTS and joint MCTS
 Asynchronous training, similar to EfficientZero, using Ray framework 
 Multiple DataActors on CPU, single LearnerActor on GPU
 Loss for each network is calculated over k unroll steps, n-step returns for value
+Prioritized Experience Replay Buffer
 Utilizes LR scheduler, adamw optimizer, gradient clipping, and loss scaling for training stability
 Utilizes jaxMARL for jax environments
 Uses wandb for logging
@@ -23,7 +24,6 @@ To Add:
 add type hinting, proper commenting, switch to logging/coloring, etc.
 world model pretraining
 Projection network for gradient shielding and training stability
-Prioritized Experience Replay
 model saving/checkpointing/testing/rendering
 Add more unit tests, clean up existing unit tests, use logging module for unit tests
 

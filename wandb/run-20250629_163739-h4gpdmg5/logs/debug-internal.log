@@ -1,0 +1,7 @@
+{"time":"2025-06-29T16:37:39.958054375-05:00","level":"INFO","msg":"stream: starting","core version":"0.20.1","symlink path":"/home/ryan/toy_mazero/wandb/run-20250629_163739-h4gpdmg5/logs/debug-core.log"}
+{"time":"2025-06-29T16:37:40.32806863-05:00","level":"INFO","msg":"stream: created new stream","id":"h4gpdmg5"}
+{"time":"2025-06-29T16:37:40.32810347-05:00","level":"INFO","msg":"stream: started","id":"h4gpdmg5"}
+{"time":"2025-06-29T16:37:40.328126598-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"h4gpdmg5"}
+{"time":"2025-06-29T16:37:40.328157919-05:00","level":"INFO","msg":"handler: started","stream_id":"h4gpdmg5"}
+{"time":"2025-06-29T16:37:40.328218213-05:00","level":"INFO","msg":"sender: started","stream_id":"h4gpdmg5"}
+{"time":"2025-06-29T16:37:40.459021468-05:00","level":"INFO","msg":"Starting system monitor"}

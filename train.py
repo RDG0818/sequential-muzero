@@ -5,7 +5,7 @@ import numpy as np
 from collections import deque
 import multiprocessing as mp
 import os
-from typing import List, Dict, Callable, TYPE_CHECKING
+from typing import List, Tuple, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from utils.replay_buffer import Episode, ReplayItem
 from utils.logging_utils import logger
@@ -14,18 +14,58 @@ import wandb
 
 @ray.remote
 class ReplayBufferActor:
-    def __init__(self):
+    """
+    A Ray actor for managing the prioritized replay buffer.
+    """
+    def __init__(self, obs_shape: Tuple, action_space_size: int):
+        """
+        Initializes the ReplayBufferActor.
+        Args:
+            config: The configuration object containing necessary parameters.
+        """
         from utils.replay_buffer import ReplayBuffer
-        self.replay_buffer = ReplayBuffer(CONFIG.train.replay_buffer_size)
+        self.replay_buffer = ReplayBuffer(
+            capacity=CONFIG.train.replay_buffer_size,
+            observation_space=obs_shape,
+            action_space_size=action_space_size,
+            num_agents=CONFIG.train.num_agents,
+            unroll_steps=CONFIG.train.unroll_steps,
+            alpha=CONFIG.train.replay_buffer_alpha,
+            beta_start=CONFIG.train.replay_buffer_beta_start,
+            beta_frames=CONFIG.train.replay_buffer_beta_frames
+        )
 
-    def add_batch(self, items: list["ReplayItem"]):
-        self.replay_buffer.add_batch(items)
+    def add(self, items: List["ReplayItem"], priorities: List[float]):
+        """
+        Adds a batch of items to the replay buffer with given priorities.
+        Args:
+            items: A list of ReplayItems to add.
+            priorities: A list of priorities corresponding to the items.
+        """
+        for item, priority in zip(items, priorities):
+            self.replay_buffer.add(item, priority)
 
-    def get_size(self):
+    def get_size(self) -> int: 
         return len(self.replay_buffer)
-    
-    def sample(self, batch_size):
+
+    def sample(self, batch_size: int) -> Tuple["ReplayItem", np.ndarray, np.ndarray]:
+        """
+        Samples a batch from the replay buffer.
+        Args:
+            batch_size: The size of the batch to sample.
+        Returns:
+            A tuple containing the batched ReplayItem, importance sampling weights, and indices.
+        """
         return self.replay_buffer.sample(batch_size)
+
+    def update_priorities(self, indices: np.ndarray, priorities: np.ndarray):
+        """
+        Updates the priorities of items in the replay buffer.
+        Args:
+            indices: The indices of the items to update.
+            priorities: The new priorities for the items.
+        """
+        self.replay_buffer.update_priorities(indices, priorities)
 
 
 @ray.remote(num_gpus=1)
@@ -67,7 +107,7 @@ class LearnerActor:
         print(f"(Learner pid={os.getpid()}) Setup complete.")
 
     @staticmethod
-    def train_step(model, optimizer, params, opt_state, batch, rng_key, value_support, reward_support):
+    def train_step(model, optimizer, params, opt_state, batch, weights, rng_key, value_support, reward_support):
         import jax
         import jax.numpy as jnp
         import optax
@@ -114,12 +154,10 @@ class LearnerActor:
                 value_loss += utils.categorical_cross_entropy_loss(vi_logits, value_target_dist[:, i+1]).mean()
 
                 # TODO: Add the SimSiam/Consistency loss here 
-            
-            policy_loss /= (U + 1)
-            value_loss /= (U + 1)
-            reward_loss /= (U + 1e-8)
 
-            total_loss = reward_loss + policy_loss + value_loss * CONFIG.train.value_loss_coefficient
+            td_error = jnp.abs(utils.support_to_scalar(v0_logits, value_support) - batch.value_target[:, 0].mean(axis=1))
+            loss = reward_loss + policy_loss + value_loss * CONFIG.train.value_loss_coefficient
+            total_loss = (loss * weights).mean()
 
             metrics = {
                 "total_loss": total_loss,
@@ -128,28 +166,33 @@ class LearnerActor:
                 "value_loss": value_loss
             }
 
-            return total_loss, metrics
+            return total_loss, (metrics, td_error)
 
-        (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+        (loss, (metrics, td_error)), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
         metrics['grad_norm'] = optax.global_norm(grads)
         
         updates, new_opt_state = optimizer.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
+        new_priorities = td_error + 1e-6
 
-        return new_params, new_opt_state, metrics
+        return new_params, new_opt_state, metrics, new_priorities
 
     def train(self):
         import jax
 
         # Sample a batch from the replay buffer
         self.rng_key, train_key = jax.random.split(self.rng_key)
-        numpy_batch = ray.get(self.replay_buffer.sample.remote(CONFIG.train.batch_size))
+        numpy_batch, numpy_weights, numpy_indices = ray.get(self.replay_buffer.sample.remote(CONFIG.train.batch_size))
         jax_batch = jax.tree_util.tree_map(lambda x: jax.device_put(x), numpy_batch)
+        jax_weights = jax.device_put(numpy_weights)
 
         # Perform a training step
-        self.params, self.opt_state, metrics = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch, train_key, 
-                                                                      self.value_support, self.reward_support)
+        self.params, self.opt_state, metrics, new_priorities = self.jitted_train_step(self.model, self.optimizer, self.params, self.opt_state, jax_batch, 
+                                                                                      jax_weights, train_key, self.value_support, self.reward_support)
         self.train_step_count += 1
+
+        numpy_priorities = np.array(new_priorities)
+        self.replay_buffer.update_priorities.remote(numpy_indices, numpy_priorities)
 
         # Convert metrics to standard Python types for logging
         metrics = {k: v.item() for k, v in metrics.items()}
@@ -299,9 +342,9 @@ class DataActor:
         for _ in range(CONFIG.train.max_episode_steps):
             self.rng_key, plan_key = jax.random.split(self.rng_key, 2)
             plan_output = self.plan_fn(self.params, plan_key, observation)
-            action_np = np.asarray(plan_output.joint_action)
+            action_np = np.array(plan_output.joint_action)
             next_observation, next_state, reward, done = self.env_wrapper.step(state, action_np)
-            episode.add_step(Transition(observation, action_np, reward, done, np.asarray(plan_output.policy_targets), plan_output.root_value))
+            episode.add_step(Transition(observation, action_np, reward, done, np.array(plan_output.policy_targets), plan_output.root_value))
             observation = next_observation
             state = next_state
             if done: break
@@ -314,11 +357,12 @@ class DataActor:
         )
 
 
-        if replay_items: self.replay_buffer.add_batch.remote(replay_items)
+        if replay_items: 
+            priorities = [1.0] * len(replay_items)
+            self.replay_buffer.add.remote(replay_items, priorities)
 
         self.episodes_since_update += 1
         if self.episodes_since_update >= CONFIG.train.param_update_interval:
-            logger.debug("Updating parameters from learner.")
             self.params = ray.get(self.learner.get_params.remote())
             self.episodes_since_update = 0
         
@@ -331,8 +375,14 @@ def main():
     wandb.init(project="toy_mazero", config=CONFIG)
     
     print(f"Ray cluster started. Available resources: {ray.available_resources()}")
+
+    from utils.env_wrapper import EnvWrapper
+    temp_env = EnvWrapper(CONFIG.train.env_name, CONFIG.train.num_agents, CONFIG.train.max_episode_steps)
+    obs_shape = temp_env.observation_space
+    action_size = temp_env.action_space_size
+    del temp_env
     
-    replay_buffer = ReplayBufferActor.remote()
+    replay_buffer = ReplayBufferActor.remote(obs_shape, action_size)
     learner = LearnerActor.remote(replay_buffer)
     actors = [DataActor.remote(i, learner, replay_buffer) for i in range(CONFIG.train.num_actors)]
 

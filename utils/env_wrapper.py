@@ -28,6 +28,7 @@ class EnvWrapper:
         self.num_agents: int = num_agents
         self.agents: List[str] = self.env.agents
         self.observation_size: int = self.env.observation_space(self.agents[0]).shape[0]
+        self.observation_space: Tuple = (self.num_agents, self.observation_size)
         self.action_space_size: int = self.env.action_space(self.agents[0]).n
         self.key: jax.random.PRNGKey = jax.random.PRNGKey(random_seed)
 

@@ -1,0 +1,42 @@
+{
+  "os": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "python": "CPython 3.10.18",
+  "startedAt": "2025-06-29T21:49:09.157457Z",
+  "program": "/home/ryan/toy_mazero/train.py",
+  "codePath": "train.py",
+  "git": {
+    "remote": "https://github.com/RDG0818/toy_mazero.git",
+    "commit": "85d167b41748ca707fb751a17b9d9ff155428a47"
+  },
+  "email": "rdg291@msstate.edu",
+  "root": "/home/ryan/toy_mazero",
+  "host": "DESKTOP-O6M17F4",
+  "executable": "/home/ryan/miniconda3/envs/jaxmarl_env/bin/python",
+  "codePathLocal": "train.py",
+  "cpu_count": 6,
+  "cpu_count_logical": 12,
+  "gpu": "NVIDIA GeForce RTX 3060 Ti",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "1081101176832",
+      "used": "42268901376"
+    }
+  },
+  "memory": {
+    "total": "16730243072"
+  },
+  "cpu": {
+    "count": 6,
+    "countLogical": 12
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 3060 Ti",
+      "memoryTotal": "8589934592",
+      "architecture": "Ampere",
+      "uuid": "GPU-011987ef-739c-2257-6246-a21b7cc0c5e6"
+    }
+  ],
+  "cudaVersion": "12.9"
+}

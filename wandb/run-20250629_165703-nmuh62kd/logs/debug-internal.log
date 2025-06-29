@@ -1,0 +1,7 @@
+{"time":"2025-06-29T16:57:03.260924641-05:00","level":"INFO","msg":"stream: starting","core version":"0.20.1","symlink path":"/home/ryan/toy_mazero/wandb/run-20250629_165703-nmuh62kd/logs/debug-core.log"}
+{"time":"2025-06-29T16:57:03.637931153-05:00","level":"INFO","msg":"stream: created new stream","id":"nmuh62kd"}
+{"time":"2025-06-29T16:57:03.637973363-05:00","level":"INFO","msg":"stream: started","id":"nmuh62kd"}
+{"time":"2025-06-29T16:57:03.637996349-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"nmuh62kd"}
+{"time":"2025-06-29T16:57:03.638015533-05:00","level":"INFO","msg":"sender: started","stream_id":"nmuh62kd"}
+{"time":"2025-06-29T16:57:03.638053932-05:00","level":"INFO","msg":"handler: started","stream_id":"nmuh62kd"}
+{"time":"2025-06-29T16:57:03.823218809-05:00","level":"INFO","msg":"Starting system monitor"}
