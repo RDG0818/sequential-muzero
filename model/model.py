@@ -150,11 +150,13 @@ class ProjectionNetwork(fnn.Module):
         
         projection = MLP(
             layer_sizes=[self.projection_hidden_dim],
-            output_size=self.projection_output_dim
+            output_size=self.projection_output_dim,
+            name="projection_mlp"
         )(x)
         projection = fnn.LayerNorm()(projection)
         return projection
 
+    @fnn.compact
     def predict(self, proj: chex.Array) -> chex.Array:
         """
         Predicts the future state from the projected current state.
@@ -167,7 +169,8 @@ class ProjectionNetwork(fnn.Module):
         """
         prediction = MLP(
             layer_sizes=[self.prediction_hidden_dim],
-            output_size=self.prediction_output_dim
+            output_size=self.prediction_output_dim,
+            name="prediction_mlp"
         )(proj)
         return prediction
 
@@ -235,6 +238,8 @@ class FlaxMAMuZeroNet(fnn.Module):
         if self.is_mutable_collection('params'): # Initialize dynamics network parameters
             dummy_actions = jnp.zeros((batch_size, num_agents), dtype=jnp.int32)
             self.dynamics_net(hidden_states, dummy_actions)
+            self.project(hidden_states, with_prediction_head=True)
+            self.project(hidden_states, with_prediction_head=False)
 
         return MuZeroOutput(
             hidden_state=hidden_states,

@@ -5,9 +5,10 @@ import numpy as np
 from collections import deque
 import multiprocessing as mp
 import os
-from typing import List, Tuple, Any, TYPE_CHECKING
+from typing import List, Tuple, Dict, TYPE_CHECKING
 if TYPE_CHECKING:
     from utils.replay_buffer import Episode, ReplayItem
+    from utils.utils import DiscreteSupport
 from utils.logging_utils import logger
 from config import CONFIG
 import wandb
@@ -70,13 +71,30 @@ class ReplayBufferActor:
 
 @ray.remote(num_gpus=1)
 class LearnerActor:
+    """
+    The main learner actor responsible for training the MuZero model.
+
+    This actor pulls batches of experience from a remote replay buffer,
+    computes gradients, and updates the model parameters. It also periodically
+    sends the updated parameters back to the actors collecting data.
+
+    Attributes:
+        params (Dict): The current parameters of the Flax model.
+        train_step_count (int): The number of training steps performed.
+    """
     def __init__(self, replay_buffer_actor):
+        """
+        Initializes the LearnerActor, setting up the model, optimizer, and state.
+        
+        Args:
+            replay_buffer_actor (ray.actor.ActorHandle): A Ray actor handle to the replay buffer.
+        """
         import jax
         import optax
         from utils.utils import DiscreteSupport
         from model.model import FlaxMAMuZeroNet
-        from utils.env_wrapper import EnvWrapper
-        print(f"(Learner pid={os.getpid()}) Initializing on GPU...")
+        from utils.mpe_env_wrapper import MPEEnvWrapper
+        logger.info(f"(Learner pid={os.getpid()}) Initializing on GPU...")
         
         # Basic setup
         self.replay_buffer = replay_buffer_actor
@@ -87,7 +105,7 @@ class LearnerActor:
         self.reward_support = DiscreteSupport(min=-CONFIG.model.reward_support_size, max=CONFIG.model.reward_support_size)
 
         # env and model setup
-        env = EnvWrapper(CONFIG.train.env_name, N, CONFIG.train.max_episode_steps)
+        env = MPEEnvWrapper(CONFIG.train.env_name, N, CONFIG.train.max_episode_steps)
         self.model = FlaxMAMuZeroNet(CONFIG.model, env.action_space_size)
 
         # Initialize model parameters
@@ -102,12 +120,12 @@ class LearnerActor:
         self.optimizer = optax.chain(optax.clip_by_global_norm(CONFIG.train.gradient_clip_norm), optax.adamw(learning_rate=self.lr_schedule))
         self.opt_state = self.optimizer.init(self.params)
 
-        self.jitted_train_step = jax.jit(self.train_step, static_argnames=['model', 'optimizer', 'value_support', 'reward_support'])
+        self.jitted_train_step = jax.jit(self._train_step, static_argnames=['model', 'optimizer', 'value_support', 'reward_support'])
 
-        print(f"(Learner pid={os.getpid()}) Setup complete.")
+        logger.info(f"(Learner pid={os.getpid()}) Setup complete.")
 
     @staticmethod
-    def train_step(model, optimizer, params, opt_state, batch, weights, rng_key, value_support, reward_support):
+    def _train_step(model, optimizer, params, opt_state, batch, weights, rng_key, value_support: "DiscreteSupport", reward_support: "DiscreteSupport"):
         import jax
         import jax.numpy as jnp
         import optax
@@ -119,7 +137,7 @@ class LearnerActor:
         reward_target_dist = utils.scalar_to_support(batch.reward_target.mean(axis=2), reward_support)
         
         def loss_fn(p):
-            reward_loss, policy_loss, value_loss = 0.0, 0.0, 0.0
+            reward_loss, policy_loss, value_loss, consistency_loss = 0.0, 0.0, 0.0, 0.0
 
             dropout_rng, initial_rng, unroll_rng = jax.random.split(rng_key, 3)
             unroll_keys = jax.random.split(unroll_rng, U)
@@ -138,6 +156,7 @@ class LearnerActor:
 
             # Unrolled Loss Calculations
             for i in range(U):
+                online_proj = model.apply({'params': p}, hidden, True, method=model.project)
                 ai = batch.actions[:, i] # (B, N)
 
                 model_output = model.apply(
@@ -153,17 +172,32 @@ class LearnerActor:
                 policy_loss += optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1]).mean()
                 value_loss += utils.categorical_cross_entropy_loss(vi_logits, value_target_dist[:, i+1]).mean()
 
-                # TODO: Add the SimSiam/Consistency loss here 
+                target_proj = model.apply({'params': p}, hidden, False, method=model.project)
+                target_proj = jax.lax.stop_gradient(target_proj)
+
+                B, N, D = online_proj.shape
+                online_proj_flat = online_proj.reshape(B * N, D)
+                target_proj_flat = target_proj.reshape(B * N, D)
+
+                sim = optax.cosine_similarity(online_proj_flat, target_proj_flat)
+                consistency_loss -= sim.mean()
 
             td_error = jnp.abs(utils.support_to_scalar(v0_logits, value_support) - batch.value_target[:, 0].mean(axis=1))
-            loss = reward_loss + policy_loss + value_loss * CONFIG.train.value_loss_coefficient
+
+            reward_loss /= U
+            policy_loss /= (U + 1)
+            value_loss /= (U + 1)
+            consistency_loss /= U
+
+            loss = reward_loss + policy_loss + value_loss * CONFIG.train.value_scale + consistency_loss * CONFIG.train.consistency_scale
             total_loss = (loss * weights).mean()
 
             metrics = {
                 "total_loss": total_loss,
                 "reward_loss": reward_loss,
                 "policy_loss": policy_loss,
-                "value_loss": value_loss
+                "value_loss": value_loss,
+                "consistency_loss": consistency_loss
             }
 
             return total_loss, (metrics, td_error)
@@ -177,7 +211,13 @@ class LearnerActor:
 
         return new_params, new_opt_state, metrics, new_priorities
 
-    def train(self):
+    def train(self) -> Dict[str, float]:
+        """
+        Samples a batch, performs a training step, and updates the replay buffer priorities.
+
+        Returns:
+            A dictionary of metrics from the training step, converted to standard Python types.
+        """
         import jax
 
         # Sample a batch from the replay buffer
@@ -200,8 +240,8 @@ class LearnerActor:
 
         return metrics
         
-    def get_params(self): return self.params
-    def get_train_step_count(self): return self.train_step_count
+    def get_params(self) -> Dict: return self.params
+    def get_train_step_count(self) -> int: return self.train_step_count
 
 
 @ray.remote(num_cpus=1)
@@ -221,11 +261,10 @@ class DataActor:
         
         import jax
         import chex
-        import logging
         from mcts.mcts_independent import MCTSPlanner
         from mcts.mcts_joint import MCTSJointPlanner
         from mcts.mcts_sequential import MCTSSequentialPlanner
-        from utils.env_wrapper import EnvWrapper
+        from utils.mpe_env_wrapper import MPEEnvWrapper
         from model.model import FlaxMAMuZeroNet
         
         logger.info("Initializing on CPU...")
@@ -240,7 +279,7 @@ class DataActor:
         
         # Env and model setup
         self.rng_key = jax.random.PRNGKey(int(time.time()) + actor_id)
-        self.env_wrapper = EnvWrapper(CONFIG.train.env_name, CONFIG.train.num_agents, CONFIG.train.max_episode_steps)
+        self.env_wrapper = MPEEnvWrapper(CONFIG.train.env_name, CONFIG.train.num_agents, CONFIG.train.max_episode_steps)
         model = FlaxMAMuZeroNet(CONFIG.model, self.env_wrapper.action_space_size)
         
         # MCTS planner setup
@@ -372,12 +411,12 @@ class DataActor:
 def main():
     # Initialization
     ray.init(ignore_reinit_error=True)
-    wandb.init(project="toy_mazero", config=CONFIG)
+    if CONFIG.train.wandb_mode != "disabled": wandb.init(project=CONFIG.train.project_name, config=CONFIG)
     
-    print(f"Ray cluster started. Available resources: {ray.available_resources()}")
+    logger.info(f"Ray cluster started. Available resources: {ray.available_resources()}")
 
-    from utils.env_wrapper import EnvWrapper
-    temp_env = EnvWrapper(CONFIG.train.env_name, CONFIG.train.num_agents, CONFIG.train.max_episode_steps)
+    from utils.mpe_env_wrapper import MPEEnvWrapper
+    temp_env = MPEEnvWrapper(CONFIG.train.env_name, CONFIG.train.num_agents, CONFIG.train.max_episode_steps)
     obs_shape = temp_env.observation_space
     action_size = temp_env.action_space_size
     del temp_env
@@ -386,12 +425,11 @@ def main():
     learner = LearnerActor.remote(replay_buffer)
     actors = [DataActor.remote(i, learner, replay_buffer) for i in range(CONFIG.train.num_actors)]
 
-    print("Waiting for actors to initialize and run one episode...")
-    # This ensures the __init__ methods have completed before we proceed.
+    logger.info("Waiting for actors to initialize and run one episode...")
     ray.get([actor.run_episode.remote() for actor in actors]) 
 
     # Warmup Phase
-    print("\nWarmup phase...")
+    logger.info("\nWarmup phase...")
 
     start_time = time.time()
 
@@ -407,7 +445,7 @@ def main():
 
     # Main Training Loop
     end_time = time.time()
-    print(f"\nWarmup complete. Time Taken {end_time - start_time:.2f} seconds. Starting main training loop.")
+    logger.info(f"\nWarmup complete.\n Time Taken: {end_time - start_time:.2f} seconds.\n Starting main training loop.")
     episodes_processed = 0
     returns = deque(maxlen=CONFIG.train.log_interval)
     losses = deque(maxlen=CONFIG.train.log_interval)
@@ -435,7 +473,8 @@ def main():
         if done_learner_refs:
             loss_dict = ray.get(done_learner_refs[0])
             losses.append(loss_dict['total_loss'])
-            wandb.log(loss_dict, step=episodes_processed) 
+            if CONFIG.train.wandb_mode != "disabled":
+                wandb.log(loss_dict, step=episodes_processed) 
             # Start the next training step
             learner_task = learner.train.remote()
 
@@ -443,24 +482,25 @@ def main():
         if episodes_processed % CONFIG.train.log_interval == 0 and returns:
             avg_return = np.mean(returns)
             avg_loss = np.mean(losses) if losses else 0.0
-            
-            wandb.log({
-                "avg_return": avg_return, 
-                "avg_loss": avg_loss,
-                "episodes": episodes_processed
-            }, step=episodes_processed)
+            if CONFIG.train.wandb_mode != "disabled":
+                wandb.log({
+                    "avg_return": avg_return, 
+                    "avg_loss": avg_loss,
+                    "episodes": episodes_processed
+                }, step=episodes_processed)
 
-            print(f"Episodes: {episodes_processed} | Avg Return: {avg_return:.2f} | Avg Loss: {avg_loss:.4f} | Time: {time.time()-start_time:.2f}s")
+            logger.info(f"Episodes: {episodes_processed} | Avg Return: {avg_return:.2f} | Avg Loss: {avg_loss:.4f} | Time: {time.time()-start_time:.2f}s")
             start_time = time.time() 
     
-    print("Training finished.")
-    wandb.finish()
+    logger.info("Training finished.")
+    if CONFIG.train.wandb_mode != "disabled":
+        wandb.finish()
     ray.shutdown()
     
 if __name__ == "__main__":
     try:
         mp.set_start_method("spawn", force=True)
-        print("Multiprocessing start method set to 'spawn'.")
+        logger.debug("Multiprocessing start method set to 'spawn'.")
     except RuntimeError:
         pass
     main()

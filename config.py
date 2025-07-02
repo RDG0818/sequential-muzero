@@ -15,9 +15,9 @@ class ModelConfig:
     fc_reward_layers: Tuple[int, ...] = (32,)
     fc_value_layers: Tuple[int, ...] = (32,)
     fc_policy_layers: Tuple[int, ...] = (32,)
-    attention_type: str = "none"  # "transformer" or "none"
-    attention_layers: int = 3
-    attention_heads: int = 4
+    attention_type: str = "transformer"  # "transformer" or "none"
+    attention_layers: int = 1
+    attention_heads: int = 1
     dropout_rate: float = 0.1
     proj_hid: int = 256
     proj_out: int = 256
@@ -27,8 +27,8 @@ class ModelConfig:
 @dataclass
 class MCTSConfig:
     """Hyperparameters for the MCTS planner."""
-    planner_mode: str = "joint"  # "independent" or "joint"
-    num_simulations: int = 50
+    planner_mode: str = "independent"  # "independent" or "joint"
+    num_simulations: int = 100
     max_depth_gumbel_search: int = 10
     num_gumbel_samples: int = 10
 
@@ -48,15 +48,17 @@ class TrainConfig:
     replay_buffer_beta_frames: float = 100000
     batch_size: int = 256
     learning_rate: float = 3e-4
-    param_update_interval: int = 10
+    param_update_interval: int = 20
     end_lr_factor: float = 0.1
     lr_warmup_steps: int = 5000
-    value_loss_coefficient: float = 0.25
-    consistency_coeff: float = 1.0
+    value_scale: float = 0.25
+    consistency_scale: float = 1.0
     gradient_clip_norm: float = 5.0
     unroll_steps: int = 5
     n_step : int = 10
     discount_gamma: float = 0.99
+    wandb_mode: str = "online"
+    project_name: str = "SMAC"
 
 @dataclass
 class ExperimentConfig:

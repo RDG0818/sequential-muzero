@@ -1,7 +1,0 @@
-{"time":"2025-06-29T16:44:05.558109553-05:00","level":"INFO","msg":"stream: starting","core version":"0.20.1","symlink path":"/home/ryan/toy_mazero/wandb/run-20250629_164405-oipdsqz8/logs/debug-core.log"}
-{"time":"2025-06-29T16:44:05.939172713-05:00","level":"INFO","msg":"stream: created new stream","id":"oipdsqz8"}
-{"time":"2025-06-29T16:44:05.939218832-05:00","level":"INFO","msg":"stream: started","id":"oipdsqz8"}
-{"time":"2025-06-29T16:44:05.939238652-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"oipdsqz8"}
-{"time":"2025-06-29T16:44:05.939255592-05:00","level":"INFO","msg":"handler: started","stream_id":"oipdsqz8"}
-{"time":"2025-06-29T16:44:05.939280082-05:00","level":"INFO","msg":"sender: started","stream_id":"oipdsqz8"}
-{"time":"2025-06-29T16:44:06.106532989-05:00","level":"INFO","msg":"Starting system monitor"}

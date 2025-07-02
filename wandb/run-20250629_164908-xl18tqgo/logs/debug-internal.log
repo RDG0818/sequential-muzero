@@ -1,7 +1,0 @@
-{"time":"2025-06-29T16:49:09.15925049-05:00","level":"INFO","msg":"stream: starting","core version":"0.20.1","symlink path":"/home/ryan/toy_mazero/wandb/run-20250629_164908-xl18tqgo/logs/debug-core.log"}
-{"time":"2025-06-29T16:49:09.5315697-05:00","level":"INFO","msg":"stream: created new stream","id":"xl18tqgo"}
-{"time":"2025-06-29T16:49:09.53161954-05:00","level":"INFO","msg":"stream: started","id":"xl18tqgo"}
-{"time":"2025-06-29T16:49:09.531641053-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"xl18tqgo"}
-{"time":"2025-06-29T16:49:09.531668232-05:00","level":"INFO","msg":"sender: started","stream_id":"xl18tqgo"}
-{"time":"2025-06-29T16:49:09.531778303-05:00","level":"INFO","msg":"handler: started","stream_id":"xl18tqgo"}
-{"time":"2025-06-29T16:49:09.692492708-05:00","level":"INFO","msg":"Starting system monitor"}
