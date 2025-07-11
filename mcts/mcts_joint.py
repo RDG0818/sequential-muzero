@@ -3,20 +3,13 @@ import jax
 import jax.numpy as jnp
 import mctx
 import functools
-from typing import NamedTuple
+from typing import Tuple
 from model.model import FlaxMAMuZeroNet
 import utils.utils as utils
-from utils.utils import DiscreteSupport
 from config import ExperimentConfig 
+from mcts.base import MCTSPlanner, MCTSPlanOutput
 
-# Re-using the same output structure for compatibility
-class MCTSPlanOutput(NamedTuple):
-    """Output of MCTSPlanner.plan()."""
-    joint_action:   jnp.ndarray  # shape (N,), chosen action per agent
-    policy_targets: jnp.ndarray  # shape (N, A), visit-count targets per agent
-    root_value:     float        # scalar root value estimate
-
-class MCTSJointPlanner:
+class MCTSJointPlanner(MCTSPlanner):
     """
     An MCTS planner that searches over the combinatorial joint action space.
     It uses Gumbel MuZero policy to sample a subset of joint actions to consider.
@@ -27,18 +20,7 @@ class MCTSJointPlanner:
         config: ExperimentConfig
         
     ):
-        self.model = model
-        self.num_agents = config.train.num_agents
-        self.action_space_size = model.action_space_size
-        self.joint_action_space_size = self.action_space_size ** self.num_agents
-        self.joint_action_shape = (self.action_space_size,) * self.num_agents
-
-        self.num_simulations = config.mcts.num_simulations
-        self.max_depth_gumbel_search = config.mcts.max_depth_gumbel_search
-        self.num_gumbel_samples = config.mcts.num_gumbel_samples
-
-        self.value_support = DiscreteSupport(min=-config.model.value_support_size, max=config.model.value_support_size)
-        self.reward_support = DiscreteSupport(min=-config.model.reward_support_size, max=config.model.reward_support_size)
+        super().__init__(model, config)
 
         def recurrent_fn(params, rng_key, action, embedding):
             """

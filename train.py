@@ -261,7 +261,7 @@ class DataActor:
         
         import jax
         import chex
-        from mcts.mcts_independent import MCTSPlanner
+        from mcts.mcts_independent import MCTSIndependentPlanner
         from mcts.mcts_joint import MCTSJointPlanner
         from mcts.mcts_sequential import MCTSSequentialPlanner
         from utils.mpe_env_wrapper import MPEEnvWrapper
@@ -283,7 +283,7 @@ class DataActor:
         model = FlaxMAMuZeroNet(CONFIG.model, self.env_wrapper.action_space_size)
         
         # MCTS planner setup
-        planner_classes = {"independent": MCTSPlanner, "joint": MCTSJointPlanner,"sequential": MCTSSequentialPlanner}
+        planner_classes = {"independent": MCTSIndependentPlanner, "joint": MCTSJointPlanner,"sequential": MCTSSequentialPlanner}
         if CONFIG.mcts.planner_mode not in planner_classes: raise ValueError(f"Invalid planner mode: {CONFIG.mcts.planner_mode}")
         planner = planner_classes[CONFIG.mcts.planner_mode](model=model, config=CONFIG)
         self.plan_fn = jax.jit(planner.plan)

@@ -15,7 +15,7 @@ class ModelConfig:
     fc_reward_layers: Tuple[int, ...] = (32,)
     fc_value_layers: Tuple[int, ...] = (32,)
     fc_policy_layers: Tuple[int, ...] = (32,)
-    attention_type: str = "transformer"  # "transformer" or "none"
+    attention_type: str = "none"  # "transformer" or "none"
     attention_layers: int = 1
     attention_heads: int = 1
     dropout_rate: float = 0.1
@@ -27,10 +27,12 @@ class ModelConfig:
 @dataclass
 class MCTSConfig:
     """Hyperparameters for the MCTS planner."""
-    planner_mode: str = "independent"  # "independent" or "joint"
+    planner_mode: str = "sequential"  # "independent", "sequential", "joint"
     num_simulations: int = 100
     max_depth_gumbel_search: int = 10
     num_gumbel_samples: int = 10
+    independent_argmax: bool = True
+    policy_eta: float = 0.8 # The larger this is, the more the model relies on the policy network
 
 @dataclass
 class TrainConfig:
@@ -57,8 +59,8 @@ class TrainConfig:
     unroll_steps: int = 5
     n_step : int = 10
     discount_gamma: float = 0.99
-    wandb_mode: str = "online"
-    project_name: str = "SMAC"
+    wandb_mode: str = "disabled" # online or disabled
+    project_name: str = "toy_mazero"
 
 @dataclass
 class ExperimentConfig:

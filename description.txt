@@ -28,6 +28,7 @@ Add more unit tests, clean up existing unit tests, use logging module for unit t
 Data from run_episodes -> process episodes -> replay buffer -> train_step/loss_fn
 
 automated hyperparameter tuning
+evaluation script
 direchelet noise to root
 include state in replay buffer, more metrics return from run_episode
 Conditioned/sequential/alternating MCTS idea
