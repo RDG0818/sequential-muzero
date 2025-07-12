@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import NamedTuple
 import jax.numpy as jnp
+import chex
 
 from model.model import FlaxMAMuZeroNet
 from config import ExperimentConfig
@@ -18,6 +19,8 @@ class MCTSPlanOutput(NamedTuple):
     joint_action:   jnp.ndarray
     policy_targets: jnp.ndarray
     root_value:     float
+    delta_magnitude: chex.Array
+    coord_state_norm: chex.Array
 
 class MCTSPlanner(ABC):
     """

@@ -22,22 +22,21 @@ class MCTSSequentialPlanner(MCTSPlanner):
         self._recurrent_fn_jit = jax.jit(self._recurrent_fn)
         self.plan_jit = jax.jit(self._plan_loop)
     
-    def _recurrent_fn(self, params, rng_key, action: chex.Array, embedding: Tuple[chex.Array, chex.Array, chex.Array, chex.Array]) -> Tuple[mctx.RecurrentFnOutput, Tuple]:
+    def _recurrent_fn(self, params, rng_key, action: chex.Array, embedding: Tuple[chex.Array, chex.Array, chex.Array]) -> Tuple[mctx.RecurrentFnOutput, Tuple]:
             """
             Implementation of the recurrent function for sequential planning.
             """
-            latent, agent_idx, mcts_policies, coord_state = embedding # latent: (B,N,D), agent_idx: (B,), mcts_policies: (B,N,A)
+            latent, agent_idx, coord_state = embedding # latent: (B,N,D), agent_idx: (B,)
             planning_agent_idx = agent_idx[0] # scalar
             batch_size = latent.shape[0]
             batch_indices = jnp.arange(batch_size)
 
             # Get prior policies for all agents from the current latent state
             prior_logits, _ = self.model.apply({'params': params}, latent, method=self.model.predict)
-            
-            mcts_probs = jax.nn.softmax(mcts_policies, axis=-1)
-            network_probs = jax.nn.softmax(prior_logits, axis=-1)
-            combined_probs = self.policy_eta * mcts_probs + (1 - self.policy_eta) * network_probs
-            planned_actions = jnp.argmax(combined_probs, axis=-1)
+            deltas = self.model.apply({'params': params}, latent, coord_state, prior_logits, method=self.model.adapt)
+            adapted_logits = prior_logits + deltas
+
+            planned_actions = jnp.argmax(adapted_logits, axis=-1)
 
             agent_indices = jnp.arange(self.num_agents) # (N,)
             mask = agent_indices < planning_agent_idx
@@ -47,9 +46,8 @@ class MCTSSequentialPlanner(MCTSPlanner):
             else:
                 rng_key, sample_key = jax.random.split(rng_key, 2)
                 unplanned_actions = jax.random.categorical(sample_key, prior_logits) # (B,N)
-
-            actions = jnp.where(mask, planned_actions, unplanned_actions) # Assigns off turn agents actions
-
+            
+            actions = jnp.where(mask, planned_actions, unplanned_actions)
             joint_action = actions.at[batch_indices, agent_idx].set(action) # (B,N)
 
             model_output = self.model.apply(
@@ -64,7 +62,7 @@ class MCTSSequentialPlanner(MCTSPlanner):
 
             prior = policy_logits[batch_indices, agent_idx]  # (B,A)
 
-            new_embed = (next_latent, agent_idx, mcts_policies, coord_state)
+            new_embed = (next_latent, agent_idx, coord_state)
             out = mctx.RecurrentFnOutput(
                 reward=reward,
                 discount= jnp.full_like(reward, 0.99),
@@ -91,17 +89,20 @@ class MCTSSequentialPlanner(MCTSPlanner):
         keys = jax.random.split(rng_key, self.num_agents)  # (N,2)
         idxs = jnp.arange(self.num_agents, dtype=jnp.int32)     # (N,)
 
-        mcts_policies = jnp.zeros((1, self.num_agents, self.action_space_size))
         coord_state = jnp.zeros((1, self.config.model.hidden_state_size))
-        carry = (root_logits, root_value.reshape(-1), root_latent, mcts_policies, coord_state) # Tuple of (1,N,A), (1,), (1,N,D), and (1,N,A)
+
+        deltas = self.model.apply({'params': params}, root_latent, coord_state, root_logits, method=self.model.adapt)
+        delta_magnitude = jnp.mean(jnp.abs(deltas))
+
+        carry = (root_logits, root_value.reshape(-1), root_latent, coord_state) # Tuple of (1,N,A), (1,), (1,N,D)
 
         def agent_step(carry: Tuple, inputs: Tuple) -> Tuple[Tuple, Tuple]:
-            logits_b, value_b, latent_b, mcts_policies, coord_s = carry # (1,N,A), (1,), (1,N,D), (1,N,A)
+            logits_b, value_b, latent_b, coord_s = carry # (1,N,A), (1,), (1,N,D)
 
             key, agent = inputs # (N,2) and scalar
             p_slice = jax.lax.dynamic_slice(logits_b, start_indices=(0, agent, 0), slice_sizes=(1, 1, self.action_space_size))  # shape (1,1,A)
             p = p_slice.squeeze(1) # (1,A)                     
-            emb = (latent_b, jnp.array([agent], jnp.int32), mcts_policies, coord_s) # (1,N,D), (1,), and (1,N,A)
+            emb = (latent_b, jnp.array([agent], jnp.int32), coord_s) # (1,N,D), (1,)
 
             out = mctx.gumbel_muzero_policy(
                 params=params, rng_key=key, root=mctx.RootFnOutput(prior_logits=p, value=value_b, embedding=emb),
@@ -111,19 +112,27 @@ class MCTSSequentialPlanner(MCTSPlanner):
             )
             
             weights = out.action_weights.squeeze(0)
+            summary = out.search_tree.summary()
+            search_value = summary.value.squeeze()
+            root_q_values = summary.qvalues.squeeze()
+            plan_summary = jnp.concatenate([weights, jnp.atleast_1d(search_value), root_q_values])
 
-            next_coord_s, _ = self.model.apply({'params': params}, coord_s, weights, method=self.model.coordinate)
+            next_coord_s, _ = self.model.apply({'params': params}, coord_s, plan_summary, method=self.model.coordinate)
 
-            updated_mcts_policies = mcts_policies.at[agent].set(weights)
-            updated_carry = (logits_b, value_b, latent_b, updated_mcts_policies, next_coord_s)
+            updated_carry = (logits_b, value_b, latent_b, next_coord_s)
 
             return updated_carry, (out.action.squeeze(0), weights)
 
-        _, results = jax.lax.scan(agent_step, carry, (keys, idxs)) 
+        final_carry, results = jax.lax.scan(agent_step, carry, (keys, idxs)) 
         actions, weights = results  
+
+        final_coord_state = final_carry[-1]
+        coord_state_norm = jnp.linalg.norm(final_coord_state)
 
         return MCTSPlanOutput(
             joint_action=   actions,
             policy_targets= weights,
-            root_value=     root_value.squeeze().astype(float)
+            root_value=     root_value.squeeze().astype(float),
+            delta_magnitude=delta_magnitude,
+            coord_state_norm=coord_state_norm
         )

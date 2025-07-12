@@ -320,7 +320,8 @@ class FlaxMAMuZeroNet(fnn.Module):
             self.project(hidden_states, with_prediction_head=True)
             self.project(hidden_states, with_prediction_head=False)
             dummy_coord_state = jnp.zeros((batch_size, self.config.hidden_state_size))
-            dummy_plan_summary = jnp.zeros((batch_size, self.action_space_size))
+            plan_summary_size = self.action_space_size * 2 + 1
+            dummy_plan_summary = jnp.zeros((batch_size, plan_summary_size))
             self.coordinate(dummy_coord_state, dummy_plan_summary)
             self.adapt(hidden_states, dummy_coord_state, policy_logits)
 
