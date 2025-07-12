@@ -20,13 +20,10 @@ Utilizes jaxMARL for jax environments
 Uses wandb for logging
 
 To Add:
-add type hinting, proper commenting, switch to logging/coloring, etc.
 world model pretraining
 model saving/checkpointing/testing/rendering
 Add more unit tests, clean up existing unit tests, use logging module for unit tests
-
-Data from run_episodes -> process episodes -> replay buffer -> train_step/loss_fn
-
+Update joint to use optimistic search lambda and AWPO
 automated hyperparameter tuning
 evaluation script
 direchelet noise to root

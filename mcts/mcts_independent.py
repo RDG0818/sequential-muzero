@@ -32,7 +32,7 @@ class MCTSIndependentPlanner(MCTSPlanner):
             using the action from the search for the current agent and sampling
             actions for all other agents from the model's predicted policy.
             """
-            latent, agent_idx = embedding # latent: (B,N,D), agent_idx: (B,)
+            latent, agent_idx, = embedding # latent: (B,N,D), agent_idx: (B,)
             batch_size = latent.shape[0]
             batch_indices = jnp.arange(batch_size)
 
