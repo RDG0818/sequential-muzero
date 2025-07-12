@@ -59,8 +59,8 @@ class TrainConfig:
     unroll_steps: int = 5
     n_step : int = 10
     discount_gamma: float = 0.99
-    wandb_mode: str = "disabled" # online or disabled
-    project_name: str = "toy_mazero"
+    wandb_mode: str = "online" # online or disabled
+    project_name: str = "myzero"
 
 @dataclass
 class ExperimentConfig:

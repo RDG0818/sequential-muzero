@@ -378,6 +378,13 @@ class DataActor:
         observation, state = self.env_wrapper.reset()
         episode = Episode()
 
+        episode_metrics = {
+        "total_reward": 0.0,
+        "num_steps": 0,
+        "delta_magnitude": 0.0,
+        "coord_state_norm": 0.0
+         }   
+
         for _ in range(CONFIG.train.max_episode_steps):
             self.rng_key, plan_key = jax.random.split(self.rng_key, 2)
             plan_output = self.plan_fn(self.params, plan_key, observation)
@@ -386,6 +393,12 @@ class DataActor:
             episode.add_step(Transition(observation, action_np, reward, done, np.array(plan_output.policy_targets), plan_output.root_value))
             observation = next_observation
             state = next_state
+
+            episode_metrics["total_reward"] += reward
+            episode_metrics["num_steps"] += 1
+            episode_metrics["delta_magnitude"] += plan_output.delta_magnitude
+            episode_metrics["coord_state_norm"] += plan_output.coord_state_norm
+
             if done: break
 
         replay_items = self.process_episode(
@@ -405,7 +418,11 @@ class DataActor:
             self.params = ray.get(self.learner.get_params.remote())
             self.episodes_since_update = 0
         
-        return episode.episode_return
+        num_steps = episode_metrics.pop("num_steps")
+        for k in episode_metrics:
+            episode_metrics[k] /= num_steps
+
+        return episode.episode_return, episode_metrics
 
 
 def main():
@@ -460,7 +477,7 @@ def main():
         done_actor_ref = done_actor_refs[0]
         
         # Get the result from the finished actor task
-        ep_return = ray.get(done_actor_ref)
+        ep_return, episode_metrics = ray.get(done_actor_ref)
         returns.append(ep_return)
         episodes_processed += 1
         
@@ -488,7 +505,7 @@ def main():
                     "avg_loss": avg_loss,
                     "episodes": episodes_processed
                 }, step=episodes_processed)
-
+                wandb.log(episode_metrics)
             logger.info(f"Episodes: {episodes_processed} | Avg Return: {avg_return:.2f} | Avg Loss: {avg_loss:.4f} | Time: {time.time()-start_time:.2f}s")
             start_time = time.time() 
     
