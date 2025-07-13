@@ -42,7 +42,7 @@ class TrainConfig:
     num_episodes: int = 100000
     warmup_episodes: int = 1000
     log_interval: int = 100
-    num_actors: int = 6
+    num_actors: int = 16
     max_episode_steps: int = 25
     replay_buffer_size: int = 100000
     replay_buffer_alpha: float = 0.6
@@ -60,7 +60,7 @@ class TrainConfig:
     n_step : int = 10
     discount_gamma: float = 0.99
     wandb_mode: str = "online" # online or disabled
-    project_name: str = "myzero"
+    project_name: str = "myzero1"
 
 @dataclass
 class ExperimentConfig:
