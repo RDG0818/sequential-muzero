@@ -89,6 +89,8 @@ class LearnerActor:
         Args:
             replay_buffer_actor (ray.actor.ActorHandle): A Ray actor handle to the replay buffer.
         """
+        os.environ["CUDA_VISIBLE_DEVICES"]="0"
+
         import jax
         import optax
         from utils.utils import DiscreteSupport
