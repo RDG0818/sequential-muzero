@@ -24,7 +24,7 @@ class MPEEnvWrapper:
             max_steps (int): The maximum number of steps per episode.
             random_seed (int): The seed for the pseudo-random number generator.
         """
-        self.env = jaxmarl.make(env_name, num_agents=num_agents, max_steps=max_steps)
+        self.env = jaxmarl.make(env_name, num_agents=num_agents)
         self.num_agents: int = num_agents
         self.agents: List[str] = self.env.agents
         self.observation_size: int = self.env.observation_space(self.agents[0]).shape[0]
