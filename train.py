@@ -244,7 +244,7 @@ class LearnerActor:
     def get_train_step_count(self) -> int: return self.train_step_count
 
 
-@ray.remote(num_cpus=1, runtime_env={"env_vars": {"CUDA_VISIBLE_DEVICES": "", "JAX_PLATFORMS": "cpu"}})
+@ray.remote(num_cpus=1)
 class DataActor:
     """
     A Ray remote actor responsible for generating game experience.
@@ -255,6 +255,9 @@ class DataActor:
     from the main learner.
     """
     def __init__(self, actor_id, learner_actor, replay_buffer_actor):
+        # Force CPU usage for this actor
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        os.environ['JAX_PLATFORMS'] = 'cpu'
         
         import jax
         import chex
