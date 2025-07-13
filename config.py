@@ -15,7 +15,7 @@ class ModelConfig:
     fc_reward_layers: Tuple[int, ...] = (32,)
     fc_value_layers: Tuple[int, ...] = (32,)
     fc_policy_layers: Tuple[int, ...] = (32,)
-    attention_type: str = "none"  # "transformer" or "none"
+    attention_type: str = "transformer"  # "transformer" or "none"
     attention_layers: int = 1
     attention_heads: int = 1
     dropout_rate: float = 0.1
@@ -42,7 +42,7 @@ class TrainConfig:
     num_episodes: int = 100000
     warmup_episodes: int = 1000
     log_interval: int = 100
-    num_actors: int = 16
+    num_actors: int = 12
     max_episode_steps: int = 25
     replay_buffer_size: int = 100000
     replay_buffer_alpha: float = 0.6
