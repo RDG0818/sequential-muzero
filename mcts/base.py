@@ -77,7 +77,7 @@ class MCTSPlanner(ABC):
         """
         pass
     
-    def plan(self, params, rng_key, observation: jnp.ndarray) -> MCTSPlanOutput:
+    def plan(self, params, rng_key, observation: jnp.ndarray, train_mode: bool = True) -> MCTSPlanOutput:
         """
         Public-facing method to execute the JIT-compiled planning process.
 
@@ -89,4 +89,4 @@ class MCTSPlanner(ABC):
                 "Subclasses of MCTSPlanner must define `self.plan_jit` in their `__init__` method. "
                 "This is typically done with `self.plan_jit = jax.jit(self._plan_loop)`."
             )
-        return self.plan_jit(params, rng_key, observation)
+        return self.plan_jit(params, rng_key, observation, train_mode)

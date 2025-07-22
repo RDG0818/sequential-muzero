@@ -1,7 +1,46 @@
 # utils.py
 import jax
 import jax.numpy as jnp
+import chex
 from typing import NamedTuple
+from functools import partial
+
+@partial(jax.jit, static_argnames=['n_steps'])
+def n_step_returns_fn(
+    rewards: chex.Array, 
+    mcts_values: chex.Array, 
+    n_steps: int, 
+    discount_gamma: float
+) -> chex.Array:
+    """
+    Computes N-step returns with a shrinking horizon for the end of the sequence.
+
+    Args:
+        rewards: A sequence of rewards. Shape: (T,).
+        mcts_values: The sequence of MCTS values. Shape: (T+1,). (V_0 to V_T)
+    
+    Returns:
+        A sequence of targets for states s_0 to s_{T-1}. Shape: (T,).
+    """
+    T = rewards.shape[0]
+    targets = jnp.zeros_like(rewards)
+
+    def loop_body(t, current_targets):
+        horizon = jnp.minimum(n_steps, T - t)
+
+        bootstrap_val = mcts_values[t + horizon]
+        
+        g = bootstrap_val
+        def inner_loop(k, inner_g):
+            reward_idx = t + k
+            return rewards[reward_idx] + discount_gamma * inner_g
+        
+        g = jax.lax.fori_loop(0, horizon, lambda k, val: inner_loop(horizon - 1 - k, val), g)
+
+        return current_targets.at[t].set(g)
+
+    targets = jnp.concatenate([jax.lax.fori_loop(0, T, loop_body, targets), mcts_values[-1:]], axis=-1) # add final 0-step target
+    return targets
 
 class DiscreteSupport(NamedTuple):
     """A class to represent the discrete support for categorical distributions."""

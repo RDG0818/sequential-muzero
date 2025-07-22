@@ -1,3 +1,4 @@
+# mcts/mcts_sequential.py
 import jax
 import jax.numpy as jnp
 import chex
@@ -111,6 +112,7 @@ class MCTSSequentialPlanner(MCTSPlanner):
                 qtransform=functools.partial(mctx.qtransform_completed_by_mix_value, use_mixed_value=True)
             )
             
+            # Creating plan_summary
             weights = out.action_weights.squeeze(0)
             summary = out.search_tree.summary()
             search_value = summary.value.squeeze()

@@ -1,4 +1,4 @@
-# mcts_joint.py
+# mcts/mcts_joint.py
 import jax
 import jax.numpy as jnp
 import mctx
@@ -26,7 +26,7 @@ class MCTSJointPlanner(MCTSPlanner):
         self.joint_action_shape: Tuple[int, ...] = (self.action_space_size,) * self.num_agents #(A, A, ..., A) for N agents.
 
         self._recurrent_fn_jit = jax.jit(self._recurrent_fn)
-        self.plan_jit = jax.jit(self._plan_loop)
+        self.plan_jit = jax.jit(self._plan_loop, static_argnames=['train_mode'])
 
     def _recurrent_fn(self, params, rng_key, action: chex.Array, embedding: chex.Array) -> Tuple[mctx.RecurrentFnOutput, chex.Array]:
         """
@@ -81,7 +81,7 @@ class MCTSJointPlanner(MCTSPlanner):
         )
         return output, next_latent
 
-    def _plan_loop(self, params, rng_key, observation) -> MCTSPlanOutput:
+    def _plan_loop(self, params, rng_key, observation, train_mode: bool) -> MCTSPlanOutput:
         """
         The main planning logic that orchestrates the joint MCTS search.
 
@@ -93,7 +93,7 @@ class MCTSJointPlanner(MCTSPlanner):
         Returns:
             An `MCTSPlanOutput` object containing the chosen action, policy targets, and root value.
         """
-        init_key, gumbel_key = jax.random.split(rng_key)
+        init_key, gumbel_key, noise_key, explore_key = jax.random.split(rng_key, 4)
         
         # 1. Initial inference from the model
         model_output = self.model.apply(
@@ -103,9 +103,35 @@ class MCTSJointPlanner(MCTSPlanner):
         root_logits_per_agent = model_output.policy_logits
         root_value_logits = model_output.value_logits
 
+        def add_noise_to_per_agent_logits(logits_per_agent):
+            """Applies Dirichlet noise to each agent's logit vector."""
+            # Logits shape is (B, N, A)
+            probs = jax.nn.softmax(logits_per_agent, axis=-1)
+            
+            # We want noise of shape (B, N, A)
+            batch_shape = logits_per_agent.shape[:-1]  # -> (B, N)
+            num_actions = logits_per_agent.shape[-1]
+            
+            alpha_1d = jnp.full(shape=(num_actions,), fill_value=self.config.mcts.dirichlet_alpha)
+            noise = jax.random.dirichlet(noise_key, alpha_1d, shape=batch_shape)
+            
+            # Mix probabilities
+            noisy_probs = (1 - self.config.mcts.dirichlet_epsilon) * probs + self.config.mcts.dirichlet_epsilon * noise
+            
+            # Convert back to logits
+            return jnp.log(noisy_probs + 1e-6)
+
+        final_root_logits_per_agent = jax.lax.cond(
+        train_mode,
+        add_noise_to_per_agent_logits,
+        lambda logits: logits,  # If not training, do nothing
+        root_logits_per_agent
+         )
+
         # 2. Convert per-agent logits to joint action logits and get root value
-        root_joint_logits = self._logits_to_joint_logits(root_logits_per_agent)
+        root_joint_logits = self._logits_to_joint_logits(final_root_logits_per_agent)
         root_value = utils.support_to_scalar(root_value_logits, self.value_support)
+
 
         # 3. Define the MCTS root and run the Gumbel MuZero search
         root = mctx.RootFnOutput(
@@ -141,10 +167,37 @@ class MCTSJointPlanner(MCTSPlanner):
             joint_policy_target[None, :]
         ).squeeze(0)
 
+        random_action = jax.random.randint(
+            explore_key,
+            shape=(self.num_agents,),
+            minval=0,
+            maxval=self.action_space_size
+        )
+        
+        # Decide whether to take the random action based on epsilon
+        should_explore = jax.random.uniform(explore_key) < self.config.mcts.epsilon
+        
+        # Only explore during training mode
+        explore_condition = jnp.logical_and(train_mode, should_explore)
+        
+        # Select the final action to be executed in the environment
+        executed_action = jax.lax.cond(
+            explore_condition,
+            lambda _: random_action,
+            lambda _: final_joint_action,
+            operand=None
+        )
+
+        search_tree = policy_output.search_tree
+
+        improved_root_value = search_tree.node_values[:, 0]
+
         return MCTSPlanOutput(
-            joint_action=final_joint_action,
+            joint_action=executed_action,
             policy_targets=marginal_policy_targets,
-            root_value=root_value.squeeze().astype(float),
+            root_value=improved_root_value.squeeze().astype(float),
+            delta_magnitude=0,
+            coord_state_norm=0
         )
 
     def _logits_to_joint_logits(self, logits: jnp.ndarray) -> jnp.ndarray:

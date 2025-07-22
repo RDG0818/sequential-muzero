@@ -15,7 +15,7 @@ class ModelConfig:
     fc_reward_layers: Tuple[int, ...] = (32,)
     fc_value_layers: Tuple[int, ...] = (32,)
     fc_policy_layers: Tuple[int, ...] = (32,)
-    attention_type: str = "transformer"  # "transformer" or "none"
+    attention_type: str = "none"  # "transformer" or "none"
     attention_layers: int = 1
     attention_heads: int = 1
     dropout_rate: float = 0.1
@@ -27,38 +27,44 @@ class ModelConfig:
 @dataclass
 class MCTSConfig:
     """Hyperparameters for the MCTS planner."""
-    planner_mode: str = "sequential"  # "independent", "sequential", "joint"
+    planner_mode: str = "joint"  # "independent", "sequential", "joint"
     num_simulations: int = 100
     max_depth_gumbel_search: int = 10
     num_gumbel_samples: int = 10
+    dirichlet_alpha: float = 0.3
+    dirichlet_epsilon: float = 0.25
     independent_argmax: bool = True
-    policy_eta: float = 0.8 # The larger this is, the more the model relies on the policy network
+    epsilon: float = 0.05 # The larger this is, the more the model relies on the policy network
 
 @dataclass
 class TrainConfig:
     """Hyperparameters for the training process."""
-    env_name: str = "MPE_simple_spread_v3"
+    env_name: str = "MPE_simple_spread_v3" # MPE_simple_spread_v3, 5m_vs_6m, 2s3z
     num_agents: int = 3
-    num_episodes: int = 100000
+    seed: int = 42
+    tau: float = 0.001
+    train_steps: int = 1500
+    rollout_length: int = 25
     warmup_episodes: int = 1000
-    log_interval: int = 100
-    num_actors: int = 12
+    log_interval: int = 1
+    num_envs: int = 256
     max_episode_steps: int = 25
     replay_buffer_size: int = 100000
     replay_buffer_alpha: float = 0.6
     replay_buffer_beta_start: float = 0.4
     replay_buffer_beta_frames: float = 100000
     batch_size: int = 256
-    learning_rate: float = 3e-4
-    param_update_interval: int = 20
+    learning_rate: float = 1e-6
+    param_update_interval: int = 5
     end_lr_factor: float = 0.1
-    lr_warmup_steps: int = 5000
+    lr_warmup_steps: int = 100
     value_scale: float = 0.25
-    consistency_scale: float = 1.0
-    gradient_clip_norm: float = 5.0
+    consistency_scale: float = 0.0
+    gradient_clip_norm: float = 0.2
     unroll_steps: int = 5
     n_step : int = 10
     discount_gamma: float = 0.99
+    update_per_step: int = 250
     wandb_mode: str = "online" # online or disabled
     project_name: str = "myzero1"
 

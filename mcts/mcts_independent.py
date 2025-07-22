@@ -1,3 +1,4 @@
+# mcts/mcts_independent.py
 import jax
 import jax.numpy as jnp
 import chex
@@ -52,7 +53,7 @@ class MCTSIndependentPlanner(MCTSPlanner):
                 rngs={'dropout': rng_key}
             )
 
-            next_latent,  policy_logits, value_logits = model_output.hidden_state, model_output.policy_logits # (B,N,D) and (B,N,A)
+            next_latent,  policy_logits = model_output.hidden_state, model_output.policy_logits # (B,N,D) and (B,N,A)
             value_logits, reward_logits = model_output.value_logits, model_output.reward_logits
             value, reward = utils.support_to_scalar(value_logits, self.value_support), utils.support_to_scalar(reward_logits, self.reward_support) # (B,)
 
@@ -109,5 +110,7 @@ class MCTSIndependentPlanner(MCTSPlanner):
         return MCTSPlanOutput(
             joint_action=   actions,
             policy_targets= weights,
-            root_value=     root_value.squeeze().astype(float)
+            root_value=     root_value.squeeze().astype(float),
+            delta_magnitude=0,
+            coord_state_norm=0
         )

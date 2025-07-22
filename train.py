@@ -95,7 +95,7 @@ class LearnerActor:
         import optax
         from utils.utils import DiscreteSupport
         from model.model import FlaxMAMuZeroNet
-        from utils.mpe_env_wrapper import MPEEnvWrapper
+        from utils.wrappers.mpe_wrapper import MPEEnvWrapper
         logger.info(f"(Learner pid={os.getpid()}) Initializing on GPU...")
         
         # Basic setup
@@ -141,7 +141,7 @@ class LearnerActor:
         def loss_fn(p):
             reward_loss, policy_loss, value_loss, consistency_loss = 0.0, 0.0, 0.0, 0.0
 
-            dropout_rng, initial_rng, unroll_rng = jax.random.split(rng_key, 3)
+            dropout_rng, initial_rng, unroll_rng, coord_rng = jax.random.split(rng_key, 4)
             unroll_keys = jax.random.split(unroll_rng, U)
 
             reshaped_obs = batch.observation[:, 0]
@@ -266,7 +266,7 @@ class DataActor:
         from mcts.mcts_independent import MCTSIndependentPlanner
         from mcts.mcts_joint import MCTSJointPlanner
         from mcts.mcts_sequential import MCTSSequentialPlanner
-        from utils.mpe_env_wrapper import MPEEnvWrapper
+        from utils.wrappers.mpe_wrapper import MPEEnvWrapper
         from model.model import FlaxMAMuZeroNet
         
         logger.info("Initializing on CPU...")
@@ -286,8 +286,9 @@ class DataActor:
         
         # MCTS planner setup
         planner_classes = {"independent": MCTSIndependentPlanner, "joint": MCTSJointPlanner,"sequential": MCTSSequentialPlanner}
-        if CONFIG.mcts.planner_mode not in planner_classes: raise ValueError(f"Invalid planner mode: {CONFIG.mcts.planner_mode}")
-        planner = planner_classes[CONFIG.mcts.planner_mode](model=model, config=CONFIG)
+        self.planner_mode = CONFIG.mcts.planner_mode
+        if self.planner_mode not in planner_classes: raise ValueError(f"Invalid planner mode: {self.planner_mode}")
+        planner = planner_classes[self.planner_mode](model=model, config=CONFIG)
         self.plan_fn = jax.jit(planner.plan)
 
         logger.info("Setup complete.")
@@ -398,8 +399,9 @@ class DataActor:
 
             episode_metrics["total_reward"] += reward
             episode_metrics["num_steps"] += 1
-            episode_metrics["delta_magnitude"] += plan_output.delta_magnitude
-            episode_metrics["coord_state_norm"] += plan_output.coord_state_norm
+            if self.planner_mode != "joint":
+                episode_metrics["delta_magnitude"] += plan_output.delta_magnitude
+                episode_metrics["coord_state_norm"] += plan_output.coord_state_norm
 
             if done: break
 
@@ -434,7 +436,7 @@ def main():
     
     logger.info(f"Ray cluster started. Available resources: {ray.available_resources()}")
 
-    from utils.mpe_env_wrapper import MPEEnvWrapper
+    from utils.wrappers.mpe_wrapper import MPEEnvWrapper
     temp_env = MPEEnvWrapper(CONFIG.train.env_name, CONFIG.train.num_agents, CONFIG.train.max_episode_steps)
     obs_shape = temp_env.observation_space
     action_size = temp_env.action_space_size

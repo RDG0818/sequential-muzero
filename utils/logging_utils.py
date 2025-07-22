@@ -3,7 +3,7 @@
 import sys
 from loguru import logger
 
-DEBUG_MODE = True 
+DEBUG_MODE = True
 
 logger.level("INFO", color="<white>")
 logger.level("DEBUG", color="<cyan>")
@@ -19,9 +19,11 @@ log_format = (
     "<level>{message}</level>"
 )
 
+log_level = "DEBUG" if DEBUG_MODE else "INFO"
+
 logger.add(
     sys.stderr,
-    level="INFO",
+    level=log_level,
     format=log_format,
     colorize=True
 )
