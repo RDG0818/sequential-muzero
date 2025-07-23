@@ -23,60 +23,60 @@ class MCTSSequentialPlanner(MCTSPlanner):
         self.plan_jit = jax.jit(self._plan_loop)
     
     def _recurrent_fn(self, params, rng_key, action: chex.Array, embedding: Tuple[chex.Array, chex.Array, chex.Array]) -> Tuple[mctx.RecurrentFnOutput, Tuple]:
-            """
-            Implementation of the recurrent function for sequential planning.
-            """
-            latent, agent_idx, coord_state = embedding # latent: (B,N,D), agent_idx: (B,)
-            planning_agent_idx = agent_idx[0] # scalar
-            batch_size = latent.shape[0]
-            batch_indices = jnp.arange(batch_size)
+        """
+        Implementation of the recurrent function for sequential planning.
+        """
+        latent, agent_idx, coord_state = embedding # latent: (B,N,D), agent_idx: (B,)
+        planning_agent_idx = agent_idx[0] # scalar
+        batch_size = latent.shape[0]
+        batch_indices = jnp.arange(batch_size)
 
-            # Get prior policies for all agents from the current latent state
-            prior_logits, _ = self.model.apply({'params': params}, latent, method=self.model.predict)
-            deltas = self.model.apply({'params': params}, latent, coord_state, prior_logits, method=self.model.adapt)
-            adapted_logits = prior_logits + deltas
+        # Get prior policies for all agents from the current latent state
+        prior_logits, _ = self.model.apply({'params': params}, latent, method=self.model.predict)
+        deltas = self.model.apply({'params': params}, latent, coord_state, prior_logits, method=self.model.adapt)
+        adapted_logits = prior_logits + deltas
 
-            planned_actions = jnp.argmax(adapted_logits, axis=-1)
+        planned_actions = jnp.argmax(adapted_logits, axis=-1)
 
-            agent_indices = jnp.arange(self.num_agents) # (N,)
-            mask = agent_indices < planning_agent_idx
+        agent_indices = jnp.arange(self.num_agents) # (N,)
+        mask = agent_indices < planning_agent_idx
 
-            if self.independent_argmax:
-                unplanned_actions = jnp.argmax(prior_logits, axis=-1) # (B,N)
-            else:
-                rng_key, sample_key = jax.random.split(rng_key, 2)
-                unplanned_actions = jax.random.categorical(sample_key, prior_logits) # (B,N)
-            
-            actions = jnp.where(mask, planned_actions, unplanned_actions)
-            joint_action = actions.at[batch_indices, agent_idx].set(action) # (B,N)
+        if self.independent_argmax:
+            unplanned_actions = jnp.argmax(prior_logits, axis=-1) # (B,N)
+        else:
+            rng_key, sample_key = jax.random.split(rng_key, 2)
+            unplanned_actions = jax.random.categorical(sample_key, prior_logits) # (B,N)
+        
+        actions = jnp.where(mask, planned_actions, unplanned_actions)
+        joint_action = actions.at[batch_indices, agent_idx].set(action) # (B,N)
 
-            model_output = self.model.apply(
-                {'params': params}, latent, joint_action,
-                method=self.model.recurrent_inference,
-                rngs={'dropout': rng_key}
-            )
+        model_output = self.model.apply(
+            {'params': params}, latent, joint_action,
+            method=self.model.recurrent_inference,
+            rngs={'dropout': rng_key}
+        )
 
-            next_latent,  policy_logits = model_output.hidden_state, model_output.policy_logits # (B,N,D) and (B,N,A)
-            value_logits, reward_logits = model_output.value_logits, model_output.reward_logits
-            value, reward = utils.support_to_scalar(value_logits, self.value_support), utils.support_to_scalar(reward_logits, self.reward_support) # (B,)
+        next_latent,  policy_logits = model_output.hidden_state, model_output.policy_logits # (B,N,D) and (B,N,A)
+        value_logits, reward_logits = model_output.value_logits, model_output.reward_logits
+        value, reward = utils.support_to_scalar(value_logits, self.value_support), utils.support_to_scalar(reward_logits, self.reward_support) # (B,)
 
-            prior = policy_logits[batch_indices, agent_idx]  # (B,A)
+        prior = policy_logits[batch_indices, agent_idx]  # (B,A)
 
-            new_embed = (next_latent, agent_idx, coord_state)
-            out = mctx.RecurrentFnOutput(
-                reward=reward,
-                discount= jnp.full_like(reward, 0.99),
-                prior_logits= prior,
-                value=value
-            )
-            return out, new_embed
+        new_embed = (next_latent, agent_idx, coord_state)
+        out = mctx.RecurrentFnOutput(
+            reward=reward,
+            discount= jnp.full_like(reward, 0.99),
+            prior_logits= prior,
+            value=value
+        )
+        return out, new_embed
 
     def _plan_loop(self, params, rng_key, observation: chex.Array):
         """
         Implementation of the main planning loop for independent MCTS.
         Uses jax.lax.scan to iterate the search over each agent.
         """
-        init_key, rng_key = jax.random.split(rng_key, 2)
+        init_key, rng_key, perm_key = jax.random.split(rng_key, 3)
         model_output = self.model.apply(
             {'params': params}, observation,
             rngs={'dropout': init_key}
@@ -87,7 +87,7 @@ class MCTSSequentialPlanner(MCTSPlanner):
 
         # Prepare per-agent inputs for scan
         keys = jax.random.split(rng_key, self.num_agents)  # (N,2)
-        idxs = jnp.arange(self.num_agents, dtype=jnp.int32)     # (N,)
+        agent_order = jax.random.permutation(perm_key, jnp.arange(self.num_agents, dtype=jnp.int32))     # (N,)
 
         coord_state = jnp.zeros((1, self.config.model.hidden_state_size))
 
@@ -123,16 +123,20 @@ class MCTSSequentialPlanner(MCTSPlanner):
 
             return updated_carry, (out.action.squeeze(0), weights)
 
-        final_carry, results = jax.lax.scan(agent_step, carry, (keys, idxs)) 
+        final_carry, results = jax.lax.scan(agent_step, carry, (keys, agent_order)) 
         actions, weights = results  
+
+        final_actions = jnp.empty_like(actions).at[agent_order].set(actions)
+        final_weights = jnp.empty_like(weights).at[agent_order].set(weights)
 
         final_coord_state = final_carry[-1]
         coord_state_norm = jnp.linalg.norm(final_coord_state)
 
         return MCTSPlanOutput(
-            joint_action=   actions,
-            policy_targets= weights,
+            joint_action=   final_actions,
+            policy_targets= final_weights,
             root_value=     root_value.squeeze().astype(float),
+            agent_order=agent_order,
             delta_magnitude=delta_magnitude,
             coord_state_norm=coord_state_norm
         )

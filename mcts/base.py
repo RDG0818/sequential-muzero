@@ -19,6 +19,7 @@ class MCTSPlanOutput(NamedTuple):
     joint_action:   jnp.ndarray
     policy_targets: jnp.ndarray
     root_value:     float
+    agent_order: chex.Array
     delta_magnitude: chex.Array
     coord_state_norm: chex.Array
 
