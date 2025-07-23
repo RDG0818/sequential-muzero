@@ -42,3 +42,10 @@ Switch to vmap and end-to-end JAX for DataActors
 Legal Actions?
 Hydra?
 Possibly add a network to create global state out of individual latent states?
+
+
+Process for updating on AWS:
+git pull
+docker build -t mazero_clone .
+docker run --gpus all --shm-size=32gb -it --rm mazero_clone
+python3 train.py

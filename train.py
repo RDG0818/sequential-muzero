@@ -89,6 +89,8 @@ class LearnerActor:
         Args:
             replay_buffer_actor (ray.actor.ActorHandle): A Ray actor handle to the replay buffer.
         """
+        import os
+        os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '.70'
         os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
         import jax
