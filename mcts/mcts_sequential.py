@@ -121,13 +121,15 @@ class MCTSSequentialPlanner(MCTSPlanner):
 
             updated_carry = (logits_b, value_b, latent_b, next_coord_s)
 
-            return updated_carry, (out.action.squeeze(0), weights)
+            return updated_carry, (out.action.squeeze(0), weights, root_q_values, search_value)
 
         final_carry, results = jax.lax.scan(agent_step, carry, (keys, agent_order)) 
-        actions, weights = results  
+        actions, weights, q_values, search_values = results  
 
         final_actions = jnp.empty_like(actions).at[agent_order].set(actions)
         final_weights = jnp.empty_like(weights).at[agent_order].set(weights)
+        final_mcts_value = jnp.mean(search_values)
+        final_search_values = jnp.empty_like(search_values).at[agent_order].set(search_values)  
 
         final_coord_state = final_carry[-1]
         coord_state_norm = jnp.linalg.norm(final_coord_state)
@@ -135,8 +137,10 @@ class MCTSSequentialPlanner(MCTSPlanner):
         return MCTSPlanOutput(
             joint_action=   final_actions,
             policy_targets= final_weights,
-            root_value=     root_value.squeeze().astype(float),
+            root_value=     final_mcts_value.squeeze().astype(float),
             agent_order=agent_order,
+            per_agent_mcts_values=final_search_values,
+            root_q_values=q_values,
             delta_magnitude=delta_magnitude,
             coord_state_norm=coord_state_norm
         )
