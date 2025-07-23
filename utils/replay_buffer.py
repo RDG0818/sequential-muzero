@@ -17,6 +17,7 @@ class Transition:
     done: bool
     policy_target: np.ndarray
     value_target: float
+    agent_order: np.ndarray
 
 @dataclass
 class Episode:
@@ -43,6 +44,7 @@ class ReplayItem:
     policy_target: np.ndarray    # Shape: (unroll_steps + 1, action_space_size)
     value_target: np.ndarray     # Shape: (unroll_steps + 1,)
     reward_target: np.ndarray    # Shape: (unroll_steps,)
+    agent_order: np.ndarray
 
 def flatten_replay_item(item: ReplayItem):
     """
@@ -56,6 +58,7 @@ def flatten_replay_item(item: ReplayItem):
         item.policy_target,
         item.value_target,
         item.reward_target,
+        item.agent_order
     )
     # No static data needed for this class, so we return None.
     static_data = None
@@ -73,6 +76,7 @@ def unflatten_replay_item(static_data, children):
         policy_target=children[3],
         value_target=children[4],
         reward_target=children[5],
+        agent_order=children[6],
     )
 
 tree_util.register_pytree_node(
@@ -110,6 +114,7 @@ class ReplayBuffer:
         self.policy_targets = np.zeros((capacity, unroll_steps + 1, num_agents, action_space_size), dtype=np.float32)
         self.value_targets = np.zeros((capacity, unroll_steps + 1, num_agents), dtype=np.float32)
         self.reward_targets = np.zeros((capacity, unroll_steps, num_agents), dtype=np.float32)
+        self.agent_orders = np.zeros((capacity, num_agents), dtype=np.int32)
 
         self.priorities = np.zeros(capacity, dtype=np.float32)
         self.pointer = 0
@@ -128,6 +133,7 @@ class ReplayBuffer:
         self.policy_targets[self.pointer] = item.policy_target
         self.value_targets[self.pointer] = item.value_target
         self.reward_targets[self.pointer] = item.reward_target
+        self.agent_orders[self.pointer] = item.agent_order
         self.priorities[self.pointer] = priority
 
         self.pointer = (self.pointer + 1) % self.capacity
@@ -176,7 +182,8 @@ class ReplayBuffer:
             target_observation=self.target_observations[indices], # Shape: (B, *O)
             policy_target=self.policy_targets[indices], # Shape: (B, U+1, A)
             value_target=self.value_targets[indices], # Shape (B, U+1, N, value)
-            reward_target=self.reward_targets[indices] # Shape (B, U, N, reward)
+            reward_target=self.reward_targets[indices], # Shape (B, U, N, reward)
+            agent_order=self.agent_orders[indices]
         )
 
         return batch, weights, indices

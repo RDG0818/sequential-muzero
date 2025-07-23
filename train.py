@@ -328,6 +328,7 @@ class DataActor:
         policy_targets = np.stack([t.policy_target for t in trajectory])
         rewards = np.array([t.reward for t in trajectory], dtype=np.float32)
         mcts_values = np.array([t.value_target for t in trajectory], dtype=np.float32)
+        agent_orders = np.stack([t.agent_order for t in trajectory])
 
         for start_index in range(ep_len - unroll_steps):
             unroll_slice = slice(start_index, start_index + unroll_steps)
@@ -361,7 +362,8 @@ class DataActor:
                     target_observation=observations[start_index + unroll_steps],
                     policy_target=policy_targets[full_slice],
                     value_target=decentralized_value_targets,
-                    reward_target=decentralized_reward_targets
+                    reward_target=decentralized_reward_targets,
+                    agent_order=agent_orders[start_index]
                 )
             )
         return replay_items
@@ -394,7 +396,7 @@ class DataActor:
             plan_output = self.plan_fn(self.params, plan_key, observation)
             action_np = np.array(plan_output.joint_action)
             next_observation, next_state, reward, done = self.env_wrapper.step(state, action_np)
-            episode.add_step(Transition(observation, action_np, reward, done, np.array(plan_output.policy_targets), plan_output.root_value))
+            episode.add_step(Transition(observation, action_np, reward, done, np.array(plan_output.policy_targets), plan_output.root_value, np.array(plan_output.agent_order)))
             observation = next_observation
             state = next_state
 
