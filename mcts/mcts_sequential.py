@@ -101,11 +101,12 @@ class MCTSSequentialPlanner(MCTSPlanner):
 
             key, agent = inputs # (N,2) and scalar
             p_slice = jax.lax.dynamic_slice(logits_b, start_indices=(0, agent, 0), slice_sizes=(1, 1, self.action_space_size))  # shape (1,1,A)
-            p = p_slice.squeeze(1) # (1,A)                     
+            p = p_slice.squeeze(1) # (1,A)         
+            mcts_key, noisy_logits = self.add_dirichlet_noise(key, p)            
             emb = (latent_b, jnp.array([agent], jnp.int32), coord_s) # (1,N,D), (1,)
 
             out = mctx.gumbel_muzero_policy(
-                params=params, rng_key=key, root=mctx.RootFnOutput(prior_logits=p, value=value_b, embedding=emb),
+                params=params, rng_key=mcts_key, root=mctx.RootFnOutput(prior_logits=noisy_logits, value=value_b, embedding=emb),
                 recurrent_fn=self._recurrent_fn_jit, num_simulations=self.num_simulations, 
                 max_depth=self.max_depth_gumbel_search, max_num_considered_actions=self.num_gumbel_samples, 
                 qtransform=functools.partial(mctx.qtransform_completed_by_mix_value, use_mixed_value=True)

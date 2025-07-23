@@ -31,6 +31,8 @@ class MCTSConfig:
     num_simulations: int = 100
     max_depth_gumbel_search: int = 10
     num_gumbel_samples: int = 10
+    dirichlet_alpha: float = 0.3
+    dirichlet_fraction: float = 0.25
     independent_argmax: bool = True
     policy_eta: float = 0.8 # The larger this is, the more the model relies on the policy network
 
@@ -42,7 +44,7 @@ class TrainConfig:
     num_episodes: int = 100000
     warmup_episodes: int = 1000
     log_interval: int = 100
-    num_actors: int = 26
+    num_actors: int = 24
     max_episode_steps: int = 25
     replay_buffer_size: int = 100000
     replay_buffer_alpha: float = 0.6

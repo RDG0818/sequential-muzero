@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import NamedTuple
+import jax
 import jax.numpy as jnp
 import chex
+from typing import Tuple
 
 from model.model import FlaxMAMuZeroNet
 from config import ExperimentConfig
@@ -54,10 +56,42 @@ class MCTSPlanner(ABC):
         # Support objects for converting logits to scalar values       
         self.value_support = DiscreteSupport(min=-config.model.value_support_size, max=config.model.value_support_size)
         self.reward_support = DiscreteSupport(min=-config.model.reward_support_size, max=config.model.reward_support_size)
+
+        # Noise
+        self.dirichlet_alpha = config.mcts.dirichlet_alpha
+        self.dirichlet_fraction = config.mcts.dirichlet_fraction
         
         # Subclasses must define these in their own __init__
         self.plan_jit = None
         self._recurrent_fn_jit = None
+
+    def add_dirichlet_noise(
+        self, rng_key: chex.Array, prior_logits: chex.Array
+    ) -> Tuple[chex.Array, chex.Array]:
+        """
+        Applies Dirichlet noise to root policy logits for exploration.
+        
+        Args:
+            rng_key: The random key for generating noise.
+            prior_logits: The policy logits from the network.
+            
+        Returns:
+            A tuple containing:
+                - A new random key to be used for the MCTS search.
+                - The noisy policy logits.
+        """
+        mcts_key, noise_key = jax.random.split(rng_key)
+        
+        probs = jax.nn.softmax(prior_logits, axis=-1)
+        noise = jax.random.dirichlet(
+            noise_key, alpha=jnp.full_like(probs, self.dirichlet_alpha)
+        )
+        noisy_probs = (
+            (1 - self.dirichlet_fraction) * probs + self.dirichlet_fraction * noise
+        )
+        noisy_logits = jnp.log(noisy_probs)
+        
+        return mcts_key, noisy_logits
 
     @abstractmethod
     def _recurrent_fn(self, params, rng_key, action, embedding):

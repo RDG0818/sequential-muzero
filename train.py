@@ -155,8 +155,8 @@ class LearnerActor:
 
             hidden, _, p0_logits, v0_logits = model_output.hidden_state, model_output.reward_logits, model_output.policy_logits, model_output.value_logits
 
-            policy_loss += optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0]).mean()
-            value_loss += utils.categorical_cross_entropy_loss(v0_logits, value_target_dist[:, 0]).mean()
+            policy_loss += optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0]).mean(-1)
+            value_loss += utils.categorical_cross_entropy_loss(v0_logits, value_target_dist[:, 0])
 
             # Unrolled Loss Calculations
             for i in range(U):
@@ -172,9 +172,9 @@ class LearnerActor:
                 )
                 hidden, ri_logits, pi_logits, vi_logits = model_output.hidden_state, model_output.reward_logits, model_output.policy_logits, model_output.value_logits
 
-                reward_loss += utils.categorical_cross_entropy_loss(ri_logits, reward_target_dist[:, i]).mean()
-                policy_loss += optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1]).mean()
-                value_loss += utils.categorical_cross_entropy_loss(vi_logits, value_target_dist[:, i+1]).mean()
+                reward_loss += utils.categorical_cross_entropy_loss(ri_logits, reward_target_dist[:, i])
+                policy_loss += optax.softmax_cross_entropy(pi_logits, batch.policy_target[:, i+1]).mean(axis=-1)
+                value_loss += utils.categorical_cross_entropy_loss(vi_logits, value_target_dist[:, i+1])
 
                 target_proj = model.apply({'params': p}, hidden, False, method=model.project)
                 target_proj = jax.lax.stop_gradient(target_proj)
@@ -184,9 +184,8 @@ class LearnerActor:
                 target_proj_flat = target_proj.reshape(B * N, D)
 
                 sim = optax.cosine_similarity(online_proj_flat, target_proj_flat)
-                consistency_loss -= sim.mean()
-
-            td_error = jnp.abs(utils.support_to_scalar(v0_logits, value_support) - batch.value_target[:, 0].mean(axis=1))
+                sim_per_sample = sim.reshape(B, CONFIG.train.num_agents).mean(axis=-1)
+                consistency_loss -= sim_per_sample
 
             reward_loss /= U
             policy_loss /= (U + 1)
@@ -196,12 +195,14 @@ class LearnerActor:
             loss = reward_loss + policy_loss + value_loss * CONFIG.train.value_scale + consistency_loss * CONFIG.train.consistency_scale
             total_loss = (loss * weights).mean()
 
+            td_error = jnp.abs(utils.support_to_scalar(v0_logits, value_support) - batch.value_target[:, 0].mean(axis=1))
+
             metrics = {
                 "total_loss": total_loss,
-                "reward_loss": reward_loss,
-                "policy_loss": policy_loss,
-                "value_loss": value_loss,
-                "consistency_loss": consistency_loss
+                "reward_loss": reward_loss.mean(),
+                "policy_loss": policy_loss.mean(),
+                "value_loss": value_loss.mean(),
+                "consistency_loss": consistency_loss.mean()
             }
 
             return total_loss, (metrics, td_error)
@@ -453,7 +454,7 @@ def main():
     action_size = temp_env.action_space_size
     del temp_env
     
-    replay_buffer = ReplayBufferActor.remote(obs_shape, action_size)
+    replay_buffer = ReplayBufferActor.options(num_cpus=4).remote(obs_shape, action_size)
     learner = LearnerActor.remote(replay_buffer)
     actors = [DataActor.remote(i, learner, replay_buffer) for i in range(CONFIG.train.num_actors)]
 
@@ -506,7 +507,7 @@ def main():
             loss_dict = ray.get(done_learner_refs[0])
             losses.append(loss_dict['total_loss'])
             if CONFIG.train.wandb_mode != "disabled":
-                wandb.log(loss_dict, step=episodes_processed) 
+                wandb.log(loss_dict, step=episodes_processed*25) # TODO: 25 is step num, change on different envs
             # Start the next training step
             learner_task = learner.train.remote()
 
@@ -519,9 +520,9 @@ def main():
                     "avg_return": avg_return, 
                     "avg_loss": avg_loss,
                     "episodes": episodes_processed
-                }, step=episodes_processed)
+                }, step=episodes_processed*25) # TODO: 25 is step num, change on different envs
                 wandb.log(episode_metrics)
-            logger.info(f"Episodes: {episodes_processed} | Avg Return: {avg_return:.2f} | Avg Loss: {avg_loss:.4f} | Time: {time.time()-start_time:.2f}s")
+            logger.info(f"Steps: {episodes_processed*25} | Avg Return: {avg_return:.2f} | Avg Loss: {avg_loss:.4f} | Time: {time.time()-start_time:.2f}s")
             start_time = time.time() 
     
     logger.info("Training finished.")
