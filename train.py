@@ -137,7 +137,6 @@ class LearnerActor:
 
         U = CONFIG.train.unroll_steps
 
-
         value_target_dist = utils.scalar_to_support(batch.value_target.mean(axis=2), value_support)
         reward_target_dist = utils.scalar_to_support(batch.reward_target.mean(axis=2), reward_support)
         
@@ -148,31 +147,47 @@ class LearnerActor:
 
             dropout_rng, initial_rng, unroll_rng = jax.random.split(rng_key, 3)
             unroll_keys = jax.random.split(unroll_rng, U)
+            
+            def build_context_for_sample(policy_targets_sample, agent_order_sample):
+                """Builds the coordination context for a single sample from the batch."""
+                
+                # First, reorder the policy targets according to the agent planning order.
+                # This creates the exact sequence we will scan over, avoiding indexing inside the loop.
+                ordered_policies = policy_targets_sample[agent_order_sample]
 
-            def context_step(carry_context, inputs):
-                policy_target, agent_idx = inputs
-                # The input to the GRU is the MCTS policy target for that agent.
-                plan_summary = policy_target[:, agent_idx, :]
-                next_context, _ = model.apply({'params': p}, carry_context, plan_summary, method=model.coordinate)
-                return next_context, None
+                # The scan function is now simpler: it just receives the next policy in the sequence.
+                def context_step(carry_context, policy_slice):
+                    # The GRU cell expects a batch dimension, so we add one.
+                    plan_summary_batched = jnp.expand_dims(policy_slice, 0)
+                    
+                    # The carry_context should also have a batch dimension.
+                    next_context, _ = model.apply(
+                        {'params': p}, carry_context, plan_summary_batched, method=model.coordinate
+                    )
+                    return next_context, None
 
-            initial_carry = jnp.zeros((B, CONFIG.model.hidden_state_size))
-            agent_order = batch.agent_order[:, 0]
-            policy_targets_t0 = batch.policy_target[:, 0]
-
-            def build_context(policy_targets, agent_order):
+                # Initial context for a single sample, with a batch dim of 1.
+                initial_context_for_sample = jnp.zeros((1, CONFIG.model.hidden_state_size))
+                
+                # Scan over the reordered policies. This is the robust JAX pattern.
                 final_context, _ = jax.lax.scan(
                     context_step,
-                    initial_carry[0],
-                    (jnp.expand_dims(policy_targets, 1), agent_order)
+                    initial_context_for_sample,
+                    ordered_policies
                 )
-                return final_context
-            
-            initial_context = jax.vmap(build_context)(policy_targets_t0, agent_order)
+                # The final context has shape (1, D_coord), we squeeze to remove the temporary batch dim.
+                return jnp.squeeze(final_context, axis=0)
 
+            # Reconstruct the context for the entire batch using vmap.
+            policy_targets_t0 = batch.policy_target[:, 0]
+            # YOUR FIX APPLIED: agent_order does not have a time dimension, so we don't slice it.
+            agent_order_t0 = batch.agent_order
+            initial_context = jax.vmap(build_context_for_sample)(policy_targets_t0, agent_order_t0)
+            
+            # Implement Context Dropout
             dropout_mask = jax.random.bernoulli(
                 dropout_rng,
-                p=CONFIG.train.context_dropout_rate, # New config parameter
+                p=CONFIG.train.context_dropout_rate,
                 shape=(B, 1)
             )
             training_context = jnp.where(
@@ -182,12 +197,11 @@ class LearnerActor:
             )
 
             reshaped_obs = batch.observation[:, 0]
-
             model_output = model.apply(
                 {'params': p},
                 reshaped_obs,
-                training_context, # Pass the context here
-                method=model.predict_with_context, # Use the new method
+                training_context,
+                method=model.initial_inference_with_context,
                 rngs={'dropout': initial_rng}
             )
 

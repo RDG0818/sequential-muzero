@@ -90,6 +90,7 @@ class PredictionNetwork(fnn.Module):
     """Predicts the policy for each agent and the centralized value."""
     action_space_size: int
     value_support_size: int
+    coord_context_size: int
     fc_value_layers: Tuple[int, ...]
     fc_policy_layers: Tuple[int, ...]
 
@@ -116,7 +117,10 @@ class PredictionNetwork(fnn.Module):
 
         # Policy prediction
         flat_agent_states = hidden_states.reshape(batch_size * num_agents, -1)
-        policy_input = flat_agent_states
+        zeros_for_context = jnp.zeros(
+            (flat_agent_states.shape[0], self.coord_context_size)
+        )
+        policy_input = jnp.concatenate([flat_agent_states, zeros_for_context], axis=-1)
         if coord_context is not None:
             coord_context_tiled = jnp.expand_dims(coord_context, axis=1)
             coord_context_tiled = jnp.tile(coord_context_tiled, (1, num_agents, 1))
@@ -210,6 +214,7 @@ class FlaxMAMuZeroNet(fnn.Module):
         self.prediction_net = PredictionNetwork(
             action_space_size=self.action_space_size,
             value_support_size=self.config.value_support_size,
+            coord_context_size=self.config.hidden_state_size,
             fc_value_layers=self.config.fc_value_layers,
             fc_policy_layers=self.config.fc_policy_layers
         )
@@ -289,6 +294,22 @@ class FlaxMAMuZeroNet(fnn.Module):
     def predict(self, hidden_states: chex.Array) -> Tuple[chex.Array, chex.Array]:
         policy_logits, value_logits = self.prediction_net(hidden_states)
         return policy_logits, value_logits
+    
+    def initial_inference_with_context(self, observations: chex.Array, coord_context: chex.Array) -> MuZeroOutput:
+        """Initial inference step that is conditioned on a team plan context."""
+        batch_size, num_agents, *_ = observations.shape
+        
+        # 1. Representation: obs -> hidden
+        flat_obs = observations.reshape(batch_size * num_agents, -1)
+        hidden_states = self.representation_net(flat_obs).reshape(batch_size, num_agents, -1)
+
+        # 2. Prediction: hidden + context -> policy/value
+        policy_logits, value_logits = self.prediction_net(hidden_states, coord_context=coord_context)
+        
+        # 3. Reward is zero at the first step
+        reward_logits = jnp.zeros((batch_size, self.config.reward_support_size * 2 + 1))
+
+        return MuZeroOutput(hidden_states, reward_logits, policy_logits, value_logits)
     
     def predict_with_context(self, hidden_states: chex.Array, coord_context: chex.Array) -> Tuple[chex.Array, chex.Array]:
         """Conditioned prediction for the MCTS root."""
