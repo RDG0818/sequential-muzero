@@ -93,7 +93,7 @@ class MCTSJointPlanner(MCTSPlanner):
         Returns:
             An `MCTSPlanOutput` object containing the chosen action, policy targets, and root value.
         """
-        init_key, gumbel_key = jax.random.split(rng_key)
+        init_key, key = jax.random.split(rng_key)
         
         # 1. Initial inference from the model
         model_output = self.model.apply(
@@ -107,14 +107,16 @@ class MCTSJointPlanner(MCTSPlanner):
         root_joint_logits = self._logits_to_joint_logits(root_logits_per_agent)
         root_value = utils.support_to_scalar(root_value_logits, self.value_support)
 
+        mcts_key, noisy_joint_logits = self.add_dirichlet_noise(key, root_joint_logits)
+
         # 3. Define the MCTS root and run the Gumbel MuZero search
         root = mctx.RootFnOutput(
-            prior_logits=root_joint_logits, value=root_value, embedding=root_latent
+            prior_logits=noisy_joint_logits, value=root_value, embedding=root_latent
         )
 
         policy_output = mctx.gumbel_muzero_policy(
             params=params,
-            rng_key=gumbel_key,
+            rng_key=mcts_key,
             root=root,
             recurrent_fn=self._recurrent_fn_jit,
             num_simulations=self.num_simulations,
@@ -126,6 +128,17 @@ class MCTSJointPlanner(MCTSPlanner):
         )
 
         # 4. Process the MCTS output
+
+        summary = policy_output.search_tree.summary()
+        final_mcts_value = summary.value.squeeze()
+
+        root_q_values_joint = summary.qvalues
+
+        # Convert joint Q-values to marginal Q-values for each agent
+        marginal_q_values = self._joint_policy_to_marginal(
+            root_q_values_joint
+        ).squeeze(0)
+
         # The action is a scalar index for the chosen joint action
         chosen_joint_action_index = policy_output.action
         joint_action_tuple = jnp.unravel_index(
@@ -139,12 +152,21 @@ class MCTSJointPlanner(MCTSPlanner):
         # Convert the joint policy target back to per-agent marginals for the loss function
         marginal_policy_targets = self._joint_policy_to_marginal(
             joint_policy_target[None, :]
-        ).squeeze(0)
+        ).squeeze(0) # Place holder, doesn't actually do anything in this code
+
+        dummy_agent_order = jnp.arange(self.num_agents, dtype=jnp.int32)
+        dummy_coord_state_norm = jnp.array(-1.0, dtype=jnp.float32)
+        # For per_agent_mcts_values, we can just tile the single MCTS value
+        per_agent_mcts_values = jnp.tile(final_mcts_value, self.num_agents)
 
         return MCTSPlanOutput(
             joint_action=final_joint_action,
             policy_targets=marginal_policy_targets,
-            root_value=root_value.squeeze().astype(float),
+            root_value=final_mcts_value.astype(float),
+            agent_order=dummy_agent_order,
+            per_agent_mcts_values=per_agent_mcts_values,
+            root_q_values=marginal_q_values,
+            coord_state_norm=dummy_coord_state_norm,
         )
 
     def _logits_to_joint_logits(self, logits: jnp.ndarray) -> jnp.ndarray:

@@ -175,78 +175,6 @@ class ProjectionNetwork(fnn.Module):
         return prediction
 
 
-class CoordinationCell(fnn.Module):
-    """
-    A GRU cell to update the coordination state (planning vector)
-    based on the results of an agent's MCTS search.
-    """
-    hidden_state_size: int
-
-    @fnn.compact
-    def __call__(self, carry: chex.Array, plan_summary: chex.Array) -> Tuple[chex.Array, chex.Array]:
-        """
-        Args:
-            carry: The previous coordination state (h_t-1).
-            plan_summary: A summary of the latest agent's plan (e.g., their target policy).
-        
-        Returns:
-            A tuple of (next_coordination_state, next_coordination_state).
-            The format is for compatibility with nn.scan.
-        """
-        # Ensure input has a batch dimension if it's missing
-        if plan_summary.ndim == 1:
-            plan_summary = jnp.expand_dims(plan_summary, axis=0)
-        if carry.ndim == 1:
-            carry = jnp.expand_dims(carry, axis=0)
-            
-        # GRU update logic
-        in_ = jnp.concatenate([carry, plan_summary], axis=-1)
-        z = fnn.sigmoid(fnn.Dense(self.hidden_state_size, name="gate_z")(in_))
-        r = fnn.sigmoid(fnn.Dense(self.hidden_state_size, name="gate_r")(in_))
-        
-        h_hat = fnn.tanh(
-            fnn.Dense(self.hidden_state_size, name="candidate_h")(
-                jnp.concatenate([r * carry, plan_summary], axis=-1)
-            )
-        )
-        
-        next_h = (1 - z) * carry + z * h_hat
-        return next_h, next_h
-
-
-class OffTurnPolicyAdapter(fnn.Module):
-    """
-    Predicts a delta to apply to the off-turn agent policies 
-    based on the coordination state and the current latent state.
-    """
-    hidden_state_size: int
-    action_space_size: int
-
-    @fnn.compact
-    def __call__(self, latent_state: chex.Array, coordination_state: chex.Array, prior_logits: chex.Array) -> chex.Array:
-        """
-        Args:
-            latent_state: The current latent state from the dynamics model (B, N, D).
-            coordination_state: The current planning vector (B, D_coord).
-            prior_logits: The raw policy logits from the model for all agents (B, N, A).
-        
-        Returns:
-            A delta to be added to the prior_logits.
-        """
-        # Tile the coordination state to match the number of agents
-        coord_state_tiled = jnp.expand_dims(coordination_state, axis=1)
-        coord_state_tiled = jnp.tile(coord_state_tiled, (1, prior_logits.shape[1], 1))
-
-        # Combine all available information
-        in_ = jnp.concatenate([latent_state, coord_state_tiled, prior_logits], axis=-1)
-
-        x = fnn.Dense(self.hidden_state_size, name="adapter_dense1")(in_)
-        x = fnn.relu(x)
-        policy_delta = fnn.Dense(self.action_space_size, name="adapter_dense2")(x)
-        
-        return policy_delta
-
-
 class FlaxMAMuZeroNet(fnn.Module):
     config: ModelConfig
     action_space_size: int
@@ -284,13 +212,7 @@ class FlaxMAMuZeroNet(fnn.Module):
             prediction_hidden_dim=self.config.pred_hid,
             prediction_output_dim=self.config.pred_out
         )
-        self.coordination_cell = CoordinationCell(
-            hidden_state_size=self.config.hidden_state_size
-        )
-        self.adapter = OffTurnPolicyAdapter(
-            hidden_state_size=self.config.hidden_state_size,
-            action_space_size=self.action_space_size
-        )
+        self.coordination_cell = fnn.GRUCell(features=self.config.hidden_state_size)
 
     def __call__(self, observations: chex.Array) -> MuZeroOutput:
         """
@@ -320,10 +242,8 @@ class FlaxMAMuZeroNet(fnn.Module):
             self.project(hidden_states, with_prediction_head=True)
             self.project(hidden_states, with_prediction_head=False)
             dummy_coord_state = jnp.zeros((batch_size, self.config.hidden_state_size))
-            plan_summary_size = self.action_space_size * 2 + 1
-            dummy_plan_summary = jnp.zeros((batch_size, plan_summary_size))
+            dummy_plan_summary = jnp.zeros((batch_size, self.action_space_size))
             self.coordinate(dummy_coord_state, dummy_plan_summary)
-            self.adapt(hidden_states, dummy_coord_state, policy_logits)
 
         return MuZeroOutput(
             hidden_state=hidden_states,
@@ -381,9 +301,7 @@ class FlaxMAMuZeroNet(fnn.Module):
             return proj
         
     def coordinate(self, carry: chex.Array, plan_summary: chex.Array) -> Tuple[chex.Array, chex.Array]:
-        next_h, next_h = self.coordination_cell(carry, plan_summary) 
-        return next_h, next_h
+        """Updates the coordination context using the standard GRU cell."""
+        new_carry, output = self.coordination_cell(carry, plan_summary)
+        return new_carry, output
     
-    def adapt(self, latent_state: chex.Array, coordination_state: chex.Array, prior_logits: chex.Array) -> chex.Array:
-        policy_delta = self.adapter(latent_state, coordination_state, prior_logits)
-        return policy_delta

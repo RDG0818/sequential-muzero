@@ -392,7 +392,6 @@ class DataActor:
         episode_metrics = {
         "total_reward": 0.0,
         "num_steps": 0,
-        "delta_magnitude": 0.0,
         "coord_state_norm": 0.0
          }   
 
@@ -412,7 +411,6 @@ class DataActor:
 
             episode_metrics["total_reward"] += reward
             episode_metrics["num_steps"] += 1
-            episode_metrics["delta_magnitude"] += plan_output.delta_magnitude
             episode_metrics["coord_state_norm"] += plan_output.coord_state_norm
 
             if done: break
@@ -507,7 +505,7 @@ def main():
             loss_dict = ray.get(done_learner_refs[0])
             losses.append(loss_dict['total_loss'])
             if CONFIG.train.wandb_mode != "disabled":
-                wandb.log(loss_dict, step=episodes_processed*25) # TODO: 25 is step num, change on different envs
+                wandb.log(loss_dict, step=episodes_processed) # TODO: 25 is step num, change on different envs
             # Start the next training step
             learner_task = learner.train.remote()
 
@@ -520,9 +518,9 @@ def main():
                     "avg_return": avg_return, 
                     "avg_loss": avg_loss,
                     "episodes": episodes_processed
-                }, step=episodes_processed*25) # TODO: 25 is step num, change on different envs
+                }, step=episodes_processed) # TODO: 25 is step num, change on different envs
                 wandb.log(episode_metrics)
-            logger.info(f"Steps: {episodes_processed*25} | Avg Return: {avg_return:.2f} | Avg Loss: {avg_loss:.4f} | Time: {time.time()-start_time:.2f}s")
+            logger.info(f"Episodes: {episodes_processed} | Avg Return: {avg_return:.2f} | Avg Loss: {avg_loss:.4f} | Time: {time.time()-start_time:.2f}s")
             start_time = time.time() 
     
     logger.info("Training finished.")

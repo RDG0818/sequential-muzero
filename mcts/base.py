@@ -24,7 +24,6 @@ class MCTSPlanOutput(NamedTuple):
     agent_order: chex.Array
     per_agent_mcts_values: chex.Array
     root_q_values: chex.Array
-    delta_magnitude: chex.Array
     coord_state_norm: chex.Array
 
 class MCTSPlanner(ABC):
