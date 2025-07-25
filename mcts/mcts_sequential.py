@@ -75,8 +75,7 @@ class MCTSSequentialPlanner(MCTSPlanner):
             rngs={'dropout': init_key}
         )
         
-        root_latent, root_logits = model_output.hidden_state, model_output.policy_logits # (1,N,D) and (1,N,A)
-        root_value = utils.support_to_scalar(model_output.value_logits, self.value_support).reshape(-1) #(1,)
+        root_latent = model_output.hidden_state # (1,N,D) 
 
         # Prepare per-agent inputs for scan
         keys = jax.random.split(rng_key, self.num_agents)  # (N,2)
@@ -88,7 +87,12 @@ class MCTSSequentialPlanner(MCTSPlanner):
 
         def agent_step(carry_coord_state: Tuple, inputs: Tuple) -> Tuple[Tuple, Tuple]:
             key, agent = inputs # (N,2) and scalar
-            p = root_logits[:, agent, :]        
+
+            policy_logits, value_logits = self.model.apply(
+                {'params': params}, root_latent, carry_coord_state, method=self.model.predict_with_context
+            )
+            root_value = utils.support_to_scalar(value_logits, self.value_support).reshape(-1)
+            p = policy_logits[:, agent, :]        
             mcts_key, noisy_logits = self.add_dirichlet_noise(key, p)            
             emb = (root_latent, jnp.array([agent], jnp.int32)) # (1,N,D), (1,)
 

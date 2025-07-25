@@ -137,19 +137,57 @@ class LearnerActor:
 
         U = CONFIG.train.unroll_steps
 
+
         value_target_dist = utils.scalar_to_support(batch.value_target.mean(axis=2), value_support)
         reward_target_dist = utils.scalar_to_support(batch.reward_target.mean(axis=2), reward_support)
         
         def loss_fn(p):
+            B = batch.observation.shape[0] # Batch size
+            N = CONFIG.train.num_agents
             reward_loss, policy_loss, value_loss, consistency_loss = 0.0, 0.0, 0.0, 0.0
 
             dropout_rng, initial_rng, unroll_rng = jax.random.split(rng_key, 3)
             unroll_keys = jax.random.split(unroll_rng, U)
 
+            def context_step(carry_context, inputs):
+                policy_target, agent_idx = inputs
+                # The input to the GRU is the MCTS policy target for that agent.
+                plan_summary = policy_target[:, agent_idx, :]
+                next_context, _ = model.apply({'params': p}, carry_context, plan_summary, method=model.coordinate)
+                return next_context, None
+
+            initial_carry = jnp.zeros((B, CONFIG.model.hidden_state_size))
+            agent_order = batch.agent_order[:, 0]
+            policy_targets_t0 = batch.policy_target[:, 0]
+
+            def build_context(policy_targets, agent_order):
+                final_context, _ = jax.lax.scan(
+                    context_step,
+                    initial_carry[0],
+                    (jnp.expand_dims(policy_targets, 1), agent_order)
+                )
+                return final_context
+            
+            initial_context = jax.vmap(build_context)(policy_targets_t0, agent_order)
+
+            dropout_mask = jax.random.bernoulli(
+                dropout_rng,
+                p=CONFIG.train.context_dropout_rate, # New config parameter
+                shape=(B, 1)
+            )
+            training_context = jnp.where(
+                dropout_mask,
+                jnp.zeros_like(initial_context),
+                initial_context
+            )
+
             reshaped_obs = batch.observation[:, 0]
 
             model_output = model.apply(
-                {'params': p}, reshaped_obs,
+                {'params': p},
+                reshaped_obs,
+                training_context, # Pass the context here
+                method=model.predict_with_context, # Use the new method
                 rngs={'dropout': initial_rng}
             )
 

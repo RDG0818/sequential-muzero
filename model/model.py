@@ -94,7 +94,7 @@ class PredictionNetwork(fnn.Module):
     fc_policy_layers: Tuple[int, ...]
 
     @fnn.compact
-    def __call__(self, hidden_states: chex.Array) -> Tuple[chex.Array, chex.Array]:
+    def __call__(self, hidden_states: chex.Array, coord_context: Optional[chex.Array] = None) -> Tuple[chex.Array, chex.Array]:
         """
         Forward pass for the prediction network.
 
@@ -116,8 +116,15 @@ class PredictionNetwork(fnn.Module):
 
         # Policy prediction
         flat_agent_states = hidden_states.reshape(batch_size * num_agents, -1)
+        policy_input = flat_agent_states
+        if coord_context is not None:
+            coord_context_tiled = jnp.expand_dims(coord_context, axis=1)
+            coord_context_tiled = jnp.tile(coord_context_tiled, (1, num_agents, 1))
+            flat_coord_context = coord_context_tiled.reshape(batch_size * num_agents, -1)
+            policy_input = jnp.concatenate([flat_agent_states, flat_coord_context], axis=-1)
+
         policy_net = MLP(layer_sizes=self.fc_policy_layers, output_size=self.action_space_size)
-        policy_logits = policy_net(flat_agent_states).reshape(batch_size, num_agents, -1)
+        policy_logits = policy_net(policy_input).reshape(batch_size, num_agents, -1)
 
         return policy_logits, value_logits
 
@@ -281,6 +288,11 @@ class FlaxMAMuZeroNet(fnn.Module):
 
     def predict(self, hidden_states: chex.Array) -> Tuple[chex.Array, chex.Array]:
         policy_logits, value_logits = self.prediction_net(hidden_states)
+        return policy_logits, value_logits
+    
+    def predict_with_context(self, hidden_states: chex.Array, coord_context: chex.Array) -> Tuple[chex.Array, chex.Array]:
+        """Conditioned prediction for the MCTS root."""
+        policy_logits, value_logits = self.prediction_net(hidden_states, coord_context=coord_context)
         return policy_logits, value_logits
     
     def project(self, hidden_state: chex.Array, with_prediction_head: bool = True) -> chex.Array:

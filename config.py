@@ -54,6 +54,7 @@ class TrainConfig:
     param_update_interval: int = 20
     end_lr_factor: float = 0.1
     lr_warmup_steps: int = 5000
+    context_dropout_rate: float = 0.15
     value_scale: float = 0.25
     consistency_scale: float = 1.0
     gradient_clip_norm: float = 5.0
