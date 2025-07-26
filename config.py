@@ -61,7 +61,7 @@ class TrainConfig:
     unroll_steps: int = 5
     n_step : int = 10
     discount_gamma: float = 0.99
-    wandb_mode: str = "disabled" # online or disabled
+    wandb_mode: str = "enabled" # online or disabled
     project_name: str = "myzero1"
 
 @dataclass
