@@ -18,8 +18,6 @@ class Transition:
     policy_target: np.ndarray
     value_target: float
     agent_order: np.ndarray
-    root_q_values: np.ndarray
-    per_agent_mcts_values: np.ndarray
 
 @dataclass
 class Episode:
@@ -47,8 +45,6 @@ class ReplayItem:
     value_target: np.ndarray     # Shape: (unroll_steps + 1,)
     reward_target: np.ndarray    # Shape: (unroll_steps,)
     agent_order: np.ndarray
-    root_q_values: np.ndarray
-    per_agent_mcts_values: np.ndarray
 
 def flatten_replay_item(item: ReplayItem):
     """
@@ -63,8 +59,6 @@ def flatten_replay_item(item: ReplayItem):
         item.value_target,
         item.reward_target,
         item.agent_order,
-        item.root_q_values,
-        item.per_agent_mcts_values
     )
     # No static data needed for this class, so we return None.
     static_data = None
@@ -83,8 +77,6 @@ def unflatten_replay_item(static_data, children):
         value_target=children[4],
         reward_target=children[5],
         agent_order=children[6],
-        root_q_values=children[7],
-        per_agent_mcts_values=children[8],
     )
 
 tree_util.register_pytree_node(
@@ -123,8 +115,6 @@ class ReplayBuffer:
         self.value_targets = np.zeros((capacity, unroll_steps + 1, num_agents), dtype=np.float32)
         self.reward_targets = np.zeros((capacity, unroll_steps, num_agents), dtype=np.float32)
         self.agent_orders = np.zeros((capacity, num_agents), dtype=np.int32)
-        self.root_q_values = np.zeros((capacity, num_agents, action_space_size), dtype=np.float32)
-        self.per_agent_mcts_values = np.zeros((capacity, num_agents), dtype=np.float32)
 
         self.priorities = np.zeros(capacity, dtype=np.float32)
         self.pointer = 0
@@ -145,8 +135,6 @@ class ReplayBuffer:
         self.reward_targets[self.pointer] = item.reward_target
         self.agent_orders[self.pointer] = item.agent_order
         self.priorities[self.pointer] = priority
-        self.root_q_values[self.pointer] = item.root_q_values
-        self.per_agent_mcts_values[self.pointer] = item.per_agent_mcts_values
 
         self.pointer = (self.pointer + 1) % self.capacity
         self.size = min(self.size + 1, self.capacity)
@@ -196,8 +184,6 @@ class ReplayBuffer:
             value_target=self.value_targets[indices], # Shape (B, U+1, N, value)
             reward_target=self.reward_targets[indices], # Shape (B, U, N, reward)
             agent_order=self.agent_orders[indices],
-            root_q_values=self.root_q_values[indices],
-            per_agent_mcts_values=self.per_agent_mcts_values[indices]
         )
 
         return batch, weights, indices

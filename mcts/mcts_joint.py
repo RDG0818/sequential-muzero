@@ -95,7 +95,6 @@ class MCTSJointPlanner(MCTSPlanner):
         """
         init_key, gumbel_key = jax.random.split(rng_key)
         
-        # 1. Initial inference from the model
         model_output = self.model.apply(
             {"params": params}, observation, rngs={"dropout": init_key}
         )
@@ -103,11 +102,10 @@ class MCTSJointPlanner(MCTSPlanner):
         root_logits_per_agent = model_output.policy_logits
         root_value_logits = model_output.value_logits
 
-        # 2. Convert per-agent logits to joint action logits and get root value
+        # Convert per-agent logits to joint action logits and get root value
         root_joint_logits = self._logits_to_joint_logits(root_logits_per_agent)
         root_value = utils.support_to_scalar(root_value_logits, self.value_support)
 
-        # 3. Define the MCTS root and run the Gumbel MuZero search
         root = mctx.RootFnOutput(
             prior_logits=root_joint_logits, value=root_value, embedding=root_latent
         )
@@ -125,18 +123,14 @@ class MCTSJointPlanner(MCTSPlanner):
             ),
         )
 
-        # 4. Process the MCTS output
-        # The action is a scalar index for the chosen joint action
         chosen_joint_action_index = policy_output.action
         joint_action_tuple = jnp.unravel_index(
             chosen_joint_action_index, self.joint_action_shape
         )
         final_joint_action = jnp.array(joint_action_tuple).squeeze(axis=-1)
 
-        # The action weights are the visit counts for the joint actions
         joint_policy_target = policy_output.action_weights
 
-        # Convert the joint policy target back to per-agent marginals for the loss function
         marginal_policy_targets = self._joint_policy_to_marginal(
             joint_policy_target[None, :]
         ).squeeze(0)
@@ -145,6 +139,7 @@ class MCTSJointPlanner(MCTSPlanner):
             joint_action=final_joint_action,
             policy_targets=marginal_policy_targets,
             root_value=root_value.squeeze().astype(float),
+            agent_order=jnp.arange(self.num_agents)
         )
 
     def _logits_to_joint_logits(self, logits: jnp.ndarray) -> jnp.ndarray:

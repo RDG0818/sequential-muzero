@@ -34,7 +34,6 @@ class MCTSConfig:
     dirichlet_alpha: float = 0.3
     dirichlet_fraction: float = 0.25
     independent_argmax: bool = True
-    policy_eta: float = 0.8 # The larger this is, the more the model relies on the policy network
 
 @dataclass
 class TrainConfig:
@@ -44,7 +43,7 @@ class TrainConfig:
     num_episodes: int = 100000
     warmup_episodes: int = 1000
     log_interval: int = 100
-    num_actors: int = 24
+    num_actors: int = 3
     max_episode_steps: int = 25
     replay_buffer_size: int = 100000
     replay_buffer_alpha: float = 0.6
@@ -57,13 +56,11 @@ class TrainConfig:
     lr_warmup_steps: int = 5000
     value_scale: float = 0.25
     consistency_scale: float = 1.0
-    coordination_scale: float = 1.0
-    stability_loss_scale: float = 1.0
     gradient_clip_norm: float = 5.0
     unroll_steps: int = 5
     n_step : int = 10
     discount_gamma: float = 0.99
-    wandb_mode: str = "enabled" # online or disabled
+    wandb_mode: str = "disabled" # online or disabled
     project_name: str = "myzero1"
 
 @dataclass

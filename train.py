@@ -143,7 +143,7 @@ class LearnerActor:
         def loss_fn(p):
             B = batch.observation.shape[0]
             N = CONFIG.train.num_agents
-            reward_loss, policy_loss, value_loss, consistency_loss, coordination_loss = 0.0, 0.0, 0.0, 0.0, 0.0
+            reward_loss, policy_loss, value_loss, consistency_loss = 0.0, 0.0, 0.0, 0.0
 
             dropout_rng, initial_rng, unroll_rng = jax.random.split(rng_key, 3)
             unroll_keys = jax.random.split(unroll_rng, U)
@@ -159,92 +159,6 @@ class LearnerActor:
 
             policy_loss += optax.softmax_cross_entropy(p0_logits, batch.policy_target[:, 0]).mean(-1)
             value_loss += utils.categorical_cross_entropy_loss(v0_logits, value_target_dist[:, 0])
-
-            plan_summaries = jnp.concatenate([
-                batch.policy_target[:, 0],
-                jnp.expand_dims(batch.per_agent_mcts_values, axis=-1),
-                batch.root_q_values
-            ], axis=-1)
-
-            agent_order = batch.agent_order
-            initial_coord_state = jnp.zeros((B, CONFIG.model.hidden_state_size))
-
-            initial_carry = (initial_coord_state, 0.0)
-            scan_indices = jnp.arange(N)
-            
-            def sequential_adaptation_step(carry, scan_input):
-                h_prev, accumulated_stability_loss = carry
-                i, agent_idx = scan_input
-
-                adapted_deltas = model.apply(
-                    {'params': p}, hidden, h_prev, p0_logits, method=model.adapt
-                )
-                adapted_logits_all_agents = p0_logits + adapted_deltas
-
-                def calculate_stability_loss():
-                    # a. Calculate cross-entropy loss for ALL agents.
-                    all_ce = optax.softmax_cross_entropy(
-                        adapted_logits_all_agents, batch.policy_target[:, 0]
-                    ) # Shape: (B, N)
-
-                    # b. Re-order the losses to match the planning sequence.
-                    # Now the j-th column corresponds to the j-th agent in the plan.
-                    ce_in_planning_order = jax.vmap(lambda losses, order: losses[order])(all_ce, agent_order)
-
-                    # c. Create a mask for the first `i` agents in the sequence.
-                    mask = jnp.arange(N) < i  # e.g., for i=2, N=5 -> [True, True, False, False, False]
-                    
-                    # d. Apply the mask to zero out losses for unplanned agents.
-                    masked_losses = ce_in_planning_order * mask
-
-                    # e. Sum the relevant losses and divide by the number of agents to get the mean.
-                    # We must handle the i=0 case to prevent division by zero.
-                    num_valid_agents = jnp.maximum(1, i)
-                    mean_loss = jnp.sum(masked_losses) / (B * num_valid_agents)
-                    return mean_loss
-
-                # Only calculate for steps > 0.
-                step_stability_loss = jax.lax.cond(
-                    i > 0,
-                    calculate_stability_loss,
-                    lambda: 0.0, # Return 0.0 if i is 0
-                )
-
-                final_policy_for_this_agent = jax.vmap(lambda policy, idx: policy[idx])(
-                    adapted_logits_all_agents, agent_idx
-                )
-
-                plan_summary_for_this_agent = jax.vmap(lambda s, idx: s[idx])(
-                    plan_summaries, agent_idx
-                )
-
-                h_next, _ = model.apply(
-                    {'params': p}, h_prev, plan_summary_for_this_agent, method=model.coordinate
-                )
-                
-                next_carry = (h_next, accumulated_stability_loss + step_stability_loss)
-                return next_carry, final_policy_for_this_agent
-
-            # Run the scan
-            final_carry, final_adapted_policies_ordered = jax.lax.scan(
-                sequential_adaptation_step, initial_carry, (scan_indices, agent_order.T)
-            )
-            total_stability_loss = final_carry[1]
-
-            # 3. Re-sort the final policies from planning order back to standard agent order
-            final_adapted_policies_ordered = jnp.swapaxes(final_adapted_policies_ordered, 0, 1) # (B, N, A)
-            final_adapted_logits = jax.vmap(lambda p, o: p[jnp.argsort(o)])(
-                final_adapted_policies_ordered, agent_order
-            )
-            
-            # 4. Calculate the coordination loss
-            main_coordination_loss = optax.softmax_cross_entropy(
-                final_adapted_logits, batch.policy_target[:, 0]
-            ).mean(axis=-1)
-
-            avg_stability_loss = total_stability_loss / jnp.maximum(1, N - 1)
-
-            coordination_loss += main_coordination_loss + avg_stability_loss * CONFIG.train.stability_loss_scale
 
             # Unrolled Loss Calculations
             for i in range(U):
@@ -280,7 +194,7 @@ class LearnerActor:
             value_loss /= (U + 1)
             consistency_loss /= U
 
-            loss = reward_loss + policy_loss + value_loss * CONFIG.train.value_scale + consistency_loss * CONFIG.train.consistency_scale + coordination_loss * CONFIG.train.coordination_scale
+            loss = reward_loss + policy_loss + value_loss * CONFIG.train.value_scale + consistency_loss * CONFIG.train.consistency_scale 
             total_loss = (loss * weights).mean()
 
             td_error = jnp.abs(utils.support_to_scalar(v0_logits, value_support) - batch.value_target[:, 0].mean(axis=1))
@@ -290,8 +204,6 @@ class LearnerActor:
                 "reward_loss": reward_loss.mean(),
                 "policy_loss": policy_loss.mean(),
                 "value_loss": value_loss.mean(),
-                "consistency_loss": consistency_loss.mean(),
-                "coordination_loss": coordination_loss.mean()
             }
 
             return total_loss, (metrics, td_error)
@@ -419,8 +331,6 @@ class DataActor:
         rewards = np.array([t.reward for t in trajectory], dtype=np.float32)
         mcts_values = np.array([t.value_target for t in trajectory], dtype=np.float32)
         agent_orders = np.stack([t.agent_order for t in trajectory])
-        root_q_values = np.stack([t.root_q_values for t in trajectory])
-        per_agent_mcts_values = np.stack([t.per_agent_mcts_values for t in trajectory])
 
         for start_index in range(ep_len - unroll_steps):
             unroll_slice = slice(start_index, start_index + unroll_steps)
@@ -456,8 +366,6 @@ class DataActor:
                     value_target=decentralized_value_targets,
                     reward_target=decentralized_reward_targets,
                     agent_order=agent_orders[start_index],
-                    root_q_values=root_q_values[start_index],
-                    per_agent_mcts_values=per_agent_mcts_values[start_index]
                 )
             )
         return replay_items
@@ -478,13 +386,6 @@ class DataActor:
         observation, state = self.env_wrapper.reset()
         episode = Episode()
 
-        episode_metrics = {
-        "total_reward": 0.0,
-        "num_steps": 0,
-        "delta_magnitude": 0.0,
-        "coord_state_norm": 0.0
-         }   
-
         for _ in range(CONFIG.train.max_episode_steps):
             self.rng_key, plan_key = jax.random.split(self.rng_key, 2)
             plan_output = self.plan_fn(self.params, plan_key, observation)
@@ -493,16 +394,9 @@ class DataActor:
             episode.add_step(Transition(observation, action_np, reward, done, 
                                         np.array(plan_output.policy_targets), 
                                         plan_output.root_value, 
-                                        np.array(plan_output.agent_order),
-                                        np.array(plan_output.root_q_values),
-                                        np.array(plan_output.per_agent_mcts_values)))
+                                        np.array(plan_output.agent_order),))
             observation = next_observation
             state = next_state
-
-            episode_metrics["total_reward"] += reward
-            episode_metrics["num_steps"] += 1
-            episode_metrics["delta_magnitude"] += plan_output.delta_magnitude
-            episode_metrics["coord_state_norm"] += plan_output.coord_state_norm
 
             if done: break
 
@@ -522,12 +416,9 @@ class DataActor:
         if self.episodes_since_update >= CONFIG.train.param_update_interval:
             self.params = ray.get(self.learner.get_params.remote())
             self.episodes_since_update = 0
-        
-        num_steps = episode_metrics.pop("num_steps")
-        for k in episode_metrics:
-            episode_metrics[k] /= num_steps
 
-        return episode.episode_return, episode_metrics
+
+        return episode.episode_return
 
 
 def main():
@@ -582,7 +473,7 @@ def main():
         done_actor_ref = done_actor_refs[0]
         
         # Get the result from the finished actor task
-        ep_return, episode_metrics = ray.get(done_actor_ref)
+        ep_return = ray.get(done_actor_ref)
         returns.append(ep_return)
         episodes_processed += 1
         
@@ -610,7 +501,6 @@ def main():
                     "avg_loss": avg_loss,
                     "episodes": episodes_processed
                 }, step=episodes_processed) # TODO: 25 is step num, change on different envs
-                wandb.log(episode_metrics)
             logger.info(f"Episodes: {episodes_processed} | Avg Return: {avg_return:.2f} | Avg Loss: {avg_loss:.4f} | Time: {time.time()-start_time:.2f}s")
             start_time = time.time() 
     

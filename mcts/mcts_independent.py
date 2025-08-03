@@ -52,7 +52,7 @@ class MCTSIndependentPlanner(MCTSPlanner):
                 rngs={'dropout': rng_key}
             )
 
-            next_latent,  policy_logits, value_logits = model_output.hidden_state, model_output.policy_logits # (B,N,D) and (B,N,A)
+            next_latent,  policy_logits = model_output.hidden_state, model_output.policy_logits # (B,N,D) and (B,N,A)
             value_logits, reward_logits = model_output.value_logits, model_output.reward_logits
             value, reward = utils.support_to_scalar(value_logits, self.value_support), utils.support_to_scalar(reward_logits, self.reward_support) # (B,)
 
@@ -88,26 +88,28 @@ class MCTSIndependentPlanner(MCTSPlanner):
         carry = (root_logits, root_value.reshape(-1), root_latent) # Tuple of (1,N,A), (1,), and (1,N,D)
 
         def agent_step(carry: Tuple, inputs: Tuple) -> Tuple[Tuple, Tuple]:
-            logits_b, value_b, latent_b = carry # (1,N,A), (1,), and (1,N,D)
             key, agent = inputs # (N,2) and scalar
-            p_slice = jax.lax.dynamic_slice(logits_b, start_indices=(0, agent, 0), slice_sizes=(1, 1, self.action_space_size))  # shape (1,1,A)
-            p = p_slice.squeeze(1) # (1,A)                     
-            emb = (latent_b, jnp.array([agent], jnp.int32)) # (1,N,D), (1,)
+            p = root_logits[:, agent, :] # (1,A)     
+            mcts_key, noisy_logits = self.add_dirichlet_noise(key, p)                
+            emb = (root_latent, jnp.array([agent], jnp.int32)) # (1,N,D), (1,)
 
             out = mctx.gumbel_muzero_policy(
-                params=params, rng_key=key, root=mctx.RootFnOutput(prior_logits=p, value=value_b, embedding=emb),
+                params=params, rng_key=mcts_key, root=mctx.RootFnOutput(prior_logits=noisy_logits, value=root_value, embedding=emb),
                 recurrent_fn=self._recurrent_fn_jit, num_simulations=self.num_simulations, 
                 max_depth=self.max_depth_gumbel_search, max_num_considered_actions=self.num_gumbel_samples, 
                 qtransform=functools.partial(mctx.qtransform_completed_by_mix_value, use_mixed_value=True)
             )
 
-            return carry, (out.action.squeeze(0), out.action_weights.squeeze(0))
+            search_value = out.search_tree.summary().value.squeeze()
+
+            return carry, (out.action.squeeze(0), out.action_weights.squeeze(0), search_value)
 
         _, results = jax.lax.scan(agent_step, carry, (keys, idxs)) 
-        actions, weights = results  
+        actions, weights, search_values = results  
 
         return MCTSPlanOutput(
             joint_action=   actions,
             policy_targets= weights,
-            root_value=     root_value.squeeze().astype(float)
+            root_value=     jnp.mean(search_values).astype(float),
+            agent_order=jnp.arange(self.num_agents)
         )
