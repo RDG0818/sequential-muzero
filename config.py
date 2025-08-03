@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Tuple
 
+# TODO: Clean up configs entries
 
 @dataclass(frozen=True)
 class ModelConfig:

@@ -1,5 +1,5 @@
 # Sequential MuZero Research Project
-Multi-agent MuZero-style world-model in JAX/FLAX for research and prototyping. Developed originally for the Tactical Behaviors for Autonomous Maneuver (TBAM) project in collaboration with Mississippi State University, Rutgers University, and the Army Research Lab.
+Multi-agent MuZero-style world-model in JAX/FLAX for research and prototyping. Developed originally for the Tactical Behaviors for Autonomous Maneuver (TBAM) project in collaboration with Mississippi State University, Rutgers University, and the Army Research Lab. For more information, contact: rdg291@msstate.edu.
 
 ## Table of Contents
 
@@ -110,7 +110,7 @@ The core research idea for this codebase is to reduce the exponential action spa
 ---
 
 ### Key Idea
-Instead of running a full joint MCTS over the joint action space $A^N$, we decompose the planning process into $N$ individual searches, each over an individual agent's action space A. This reduces the planning complexity from exponential to linear in the number of agents. This is implemented in `mcts/mcts_independent.py`. However, this approach does not encourage any form of coordination between the agents, and effectively makes each agent individually greedy. To address this, we take inspiration from [this paper](https://arxiv.org/pdf/2304.09870), specifically the Multi-Agent Decomposition Lemma. In this case, instead of conditioning on advantages, we condition on prior agents' searches. This introduces a form of coordination between the agents while still avoiding an exponential action space. The basic structure of this idea is implemented in `mcts/mcts_sequential.py`.
+Instead of running a full joint MCTS over the joint action space $A^N$, we decompose the planning process into $N$ individual searches, each over an individual agent's action space $A$. This reduces the planning complexity from exponential to linear in the number of agents. This is implemented in `mcts/mcts_independent.py`. However, this approach does not encourage any form of coordination between the agents, and effectively makes each agent individually greedy. To address this, we take inspiration from [this paper](https://arxiv.org/pdf/2304.09870), specifically the Multi-Agent Decomposition Lemma. In this case, instead of conditioning on advantages, we condition on prior agents' searches. This introduces a form of coordination between the agents while still avoiding an exponential action space. The basic structure of this idea is implemented in `mcts/mcts_sequential.py`.
 
 However, this approach introduces several research questions: 
 - What information should be passed between the searches?
@@ -130,7 +130,7 @@ Here is a non-exhaustive list of future ideas, which may or may not work:
 - Replacing the policy MLP network with an RNN based network (GRU, LSTM, transformer)
 - Incorporating Dreamv3 style dynamics for improved sample efficiency
 - Some form of value decomposition, such as QMIX
-- some form of search optimism as discussed the [MAZero paper](https://openreview.net/pdf?id=CpnKq3UJwp) (note that this is very demanding on implementation and requires significant modification the MCTX high level functions)
+- some form of search optimism as discussed in the [MAZero paper](https://openreview.net/pdf?id=CpnKq3UJwp) (note that this is very demanding on implementation and requires significant modification the MCTX high level functions)
 
 ## TODO and Must-Implement Features
 
@@ -148,71 +148,71 @@ There are several TODOs listed throughout the codebase. If you are new to this c
 
 ### Permutation Invariant Critic (implemented on the MAZero codebase)
 **What I tried:**
-> Integrated a [Permutation Invariant Critic](https://arxiv.org/pdf/1911.00025) (PIC) as a replacement for the MLP-based reward and value networks.
+- Integrated a [Permutation Invariant Critic](https://arxiv.org/pdf/1911.00025) (PIC) as a replacement for the MLP-based reward and value networks.
 
 **Why I thought it might help:**
-> Theoretically, a permutation-invariant architecture would better model inter-agent relationships and generalize across agent orderings, leading to improved reward/value estimation and more stable training.
+- Theoretically, a permutation-invariant architecture would better model inter-agent relationships and generalize across agent orderings, leading to improved reward/value estimation and more stable training.
 
 **Why it didn't work:**
-> In practice, it yielded minimal performance gains on several SMAC environments while adding significant architectural complexity. It also didn’t offer enough novelty to justify the tradeoff from a research perspective.
+- In practice, it yielded minimal performance gains on several SMAC environments while adding significant architectural complexity. It also didn’t offer enough novelty to justify the tradeoff from a research perspective.
 
 **Notes:**
-> May still be beneficial in settings with larger agent counts or more complex coordination — as shown in the original PIC paper. Also relatively easy to plug into existing pipelines if revisiting.
+- May still be beneficial in settings with larger agent counts or more complex coordination — as shown in the original PIC paper. Also relatively easy to plug into existing pipelines if revisiting.
 
 ### Synchronous Training
 **What I tried:**
-> Replaced the asynchronous EfficientZero-style architecture with a fully synchronous training loop written entirely in JAX (see `synch` branch).
+- Replaced the asynchronous EfficientZero-style architecture with a fully synchronous training loop written entirely in JAX (see `synch` branch).
 
 **Why I thought it might help:**
-> Expected significant wall-clock performance gains by removing CPU-GPU communication overhead and leveraging JAX’s speed and simplicity. The synchronous loop also makes the system easier to debug and reason about.
+- Expected significant wall-clock performance gains by removing CPU-GPU communication overhead and leveraging JAX’s speed and simplicity. The synchronous loop also makes the system easier to debug and reason about.
 
 **Why it didn't work:**
-> Performance was worse than random — the policy entered a negative learning cycle and failed to improve. The root cause remains unclear despite extensive debugging. While reduced data diversity could be a factor, it doesn’t fully explain the degradation.
+- Performance was worse than random — the policy entered a negative learning cycle and failed to improve. The root cause remains unclear despite extensive debugging. While reduced data diversity could be a factor, it doesn’t fully explain the degradation.
 
 **Notes:**
-> If someone can debug and fix this, the codebase could become much simpler and faster. The `synch` branch includes several unit tests and instrumentation to help trace the problem. Worth revisiting if you want to eliminate Ray entirely.
+- If someone can debug and fix this, the codebase could become much simpler and faster. The `synch` branch includes several unit tests and instrumentation to help trace the problem. Worth revisiting if you want to eliminate Ray entirely.
 
 ### Delta Network + Coordination Context
 **What I tried:**
-> - A coordination cell (a GRU) that aggregated hidden states and action statistics from the previous agent’s search. This produced a "planning vector" passed to the next agent, allowing agents to condition their search on the decisions of earlier agents. 
-> - A delta network (an MLP) that took the current state, predicted policy, and planning vector to compute a delta — a correction applied to the off-turn agents' actions to make them more coordinated with the current agent
+- - A coordination cell (a GRU) that aggregated hidden states and action statistics from the previous agent’s search. This produced a "planning vector" passed to the next agent, allowing agents to condition their search on the decisions of earlier agents. 
+- - A delta network (an MLP) that took the current state, predicted policy, and planning vector to compute a delta — a correction applied to the off-turn agents' actions to make them more coordinated with the current agent
 
 **Why I thought it might help:**
-> This idea attempts to mitigate the coordination problem of independent MCTS while still maintaining Centralized Training with Decentralized Execution (CTDE). My hypothesis was that the gap between an optimal (coordinated) policy and a greedy, independent one should be learnable. The delta network would capture this difference and apply it during search to bias agents toward coordinated behavior.
+- This idea attempts to mitigate the coordination problem of independent MCTS while still maintaining Centralized Training with Decentralized Execution (CTDE). My hypothesis was that the gap between an optimal (coordinated) policy and a greedy, independent one should be learnable. The delta network would capture this difference and apply it during search to bias agents toward coordinated behavior.
 
 **Why it didn't work:**
-> The main issue was a lack of a clear, effective loss function. Training the delta network to match MCTS policy targets simply pushed the delta to zero, having no effect. Value-based gradient methods weren’t applicable due to the strictly off-policy nature of the data. Additionally, the planning vector was only meaningful at the root of the search tree, yet had to be applied several simulation steps later. This introduced temporal staleness, instability, and noise in coordination signals. The overall system added substantial complexity and did not improve performance on tested environments.
+- The main issue was a lack of a clear, effective loss function. Training the delta network to match MCTS policy targets simply pushed the delta to zero, having no effect. Value-based gradient methods weren’t applicable due to the strictly off-policy nature of the data. Additionally, the planning vector was only meaningful at the root of the search tree, yet had to be applied several simulation steps later. This introduced temporal staleness, instability, and noise in coordination signals. The overall system added substantial complexity and did not improve performance on tested environments.
 
 **Notes:**
-> Conceptually, this remains one of the few approaches I can think of that combines inter-agent conditioning with CTDE constraints. If someone can address the temporal staleness issue and creating a proper learning objective, then this architecture may still offer a promising way to guide multi-agent coordination during latent-space planning.
+- Conceptually, this remains one of the few approaches I can think of that combines inter-agent conditioning with CTDE constraints. If someone can address the temporal staleness issue and creating a proper learning objective, then this architecture may still offer a promising way to guide multi-agent coordination during latent-space planning.
 
 ### Policy Network Conditioning
 
 **What I tried:**
-> A simplified variation of the delta network idea, where instead of applying a learned delta to the policy, I directly fed the planning vector into the policy network as an additional input. During unconditioned rollouts, a zero vector was passed instead.
+- A simplified variation of the delta network idea, where instead of applying a learned delta to the policy, I directly fed the planning vector into the policy network as an additional input. During unconditioned rollouts, a zero vector was passed instead.
 
 **Why I thought it might help:**
-> The delta network was collapsing to zero and lacked a stable training objective. By integrating the planning signal directly into the policy network, I hoped it would learn to interpret and use the coordination information more effectively, simplifying the architecture.
+- The delta network was collapsing to zero and lacked a stable training objective. By integrating the planning signal directly into the policy network, I hoped it would learn to interpret and use the coordination information more effectively, simplifying the architecture.
 
 **Why it didn't work:**
-> This doesn't address the temporal staleness in the planning vector. During the search, a planning vector with information about state $s_t$ is not applicable to state $s_{t+z}$. Thus, even with the combined roles, the additional information given simply isn't useful. Additionally, it was difficult to ensure the network was meaningfully using the vector without over-relying on it or ignoring it entirely. It also splits the gradients for the policy network between training to work with the planning vector and without it. This becomes more apparent as well with the training testing discrepancy. The training almost always has the planning vector accessible, but during execution, the planning vector is essentially always zero. The policy network improving with the planning vector doesn't imply that the policy network is improving its output without the planning vector, so its overall performance was worse than the independent implementation.
+- This doesn't address the temporal staleness in the planning vector. During the search, a planning vector with information about state $s_t$ is not applicable to state $s_{t+z}$. Thus, even with the combined roles, the additional information given simply isn't useful. Additionally, it was difficult to ensure the network was meaningfully using the vector without over-relying on it or ignoring it entirely. It also splits the gradients for the policy network between training to work with the planning vector and without it. This becomes more apparent as well with the training testing discrepancy. The training almost always has the planning vector accessible, but during execution, the planning vector is essentially always zero. The policy network improving with the planning vector doesn't imply that the policy network is improving its output without the planning vector, so its overall performance was worse than the independent implementation.
 
 **Notes**:
-> I don't think this idea really has any potential.
+- I don't think this idea really has any potential. However, there are some clever ideas to fix the temporal staleness issue. Having another network adjust the planning vector depending on the state could be an interesting idea. You could also make the training force the planning vector to encode short-term relevant information.
 
 ### Autoregressive Policy Network
 **What I tried:**
-> Attempted to implement the autoregressive policy network from [this paper](https://github.com/PKU-MARL/Multi-Agent-Transformer), which models inter-agent dependencies by generating agent actions sequentially. This breaks CTDE, but shows strong empirical performance in cooperative multi-agent tasks.
+- Attempted to implement the autoregressive policy network from [this paper](https://github.com/PKU-MARL/Multi-Agent-Transformer), which models inter-agent dependencies by generating agent actions sequentially. This breaks CTDE, but shows strong empirical performance in cooperative multi-agent tasks.
 
 **Why I thought it might help:**
-> The paper aligns closely with our research direction, especially in modeling agent-level coordination through structured action generation. Although it was demonstrated in an on-policy PPO-style setup, the same principles seemed applicable to our setting.
+- The paper aligns closely with our research direction, especially in modeling agent-level coordination through structured action generation. Although it was demonstrated in an on-policy PPO-style setup, the same principles seemed applicable to our setting.
 
 **Why it didn't work:**
-> I was unable to complete the implementation due to the architectural complexity of translating a full transformer-based autoregressive model into this codebase. The `transformer` branch contains an early-stage attempt, but progress was blocked by difficult-to-debug JAX tracer issues, likely caused by the model's recursive, sequential structure.
+- I was unable to complete the implementation due to the architectural complexity of translating a full transformer-based autoregressive model into this codebase. The `transformer` branch contains an early-stage attempt, but progress was blocked by difficult-to-debug JAX tracer issues, likely caused by the model's recursive, sequential structure.
 Even with a working implementation, the approach would be computationally infeasible under current infrastructure: each policy call becomes a quadratic-time operation in both the number of agents and search steps, which is incompatible with efficient planning in anything but toy environments.
 
 **Notes:**
-> I believe this is the most promising idea for improving coordination quality. There is strong supporting evidence from the multi-agent RL literature, and if the wall-clock time issue is addressed and the CTDE violations can be tolerated, then I believe this is the most paper-worthy idea. However, this is an extremely complicated implementation, and implementing optimizations to the attention process (caching, quantization, etc.) will drastically increase code complexity. If you want to pursue this direction, expect to dedicate a significant amount of time debugging, profiling, and implementing just the architecture of this idea.
+- I believe this is the most promising idea for improving coordination quality. There is strong supporting evidence from the multi-agent RL literature, and if the wall-clock time issue is addressed and the CTDE violations can be tolerated, then I believe this is the most paper-worthy idea. However, this is an extremely complicated implementation, and implementing optimizations to the attention process (caching, quantization, etc.) will drastically increase code complexity. If you want to pursue this direction, expect to dedicate a significant amount of time debugging, profiling, and implementing just the architecture of this idea.
 
 ## Relevant Papers
 
@@ -220,8 +220,9 @@ Even with a working implementation, the approach would be computationally infeas
 - [MAZero](https://openreview.net/pdf?id=CpnKq3UJwp)
 - [Multi-agent Transformer](https://arxiv.org/pdf/2205.14953)
 - [Permutation Invariant Critic](https://arxiv.org/pdf/1911.00025)
-
+- [Hetergeneous Agent Reinforcment Learning](https://arxiv.org/pdf/2304.09870)
 
 ## License
 
-
+This project is licensed under the [MIT License](LICENSE).  
+You are free to use, modify, and distribute this software with attribution. See the LICENSE file for details.
