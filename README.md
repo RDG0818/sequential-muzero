@@ -86,8 +86,8 @@ python3 train.py
 
 - `train.py` - defines the replay buffer, learner, and data actors as well as the training loop.
 - `config.py` - defines the major hyperparameters used in the entire project
-- `model/model.py` - defines the representation, dynamics, prediction, and projection networks and the `FlaxMAMuZeroNet` API.
-- `mcts/` - folder that contains files defining the abstract base class for the MCTS planners and the logic independent, sequential, and joint variations.
+- `model/model.py` - defines the representation, dynamics, prediction, and projection networks and the `FlaxMAMuZeroNet` API
+- `mcts/` - folder that contains files defining the abstract base class for the MCTS planners and the logic for the independent, sequential, and joint variations.
 - `utils/replay_buffer.py` - defines the replay buffer and prioritized experience replay logic
 - `utils/mpe_env_wrapper.py` - defines the environment wrapper for the MPE environments
 - `utils/utils.py` - defines the categorical transforms for the reward and value as well as other useful functions
