@@ -174,8 +174,8 @@ There are several TODOs listed throughout the codebase. If you are new to this c
 
 ### Delta Network + Coordination Context
 **What I tried:**
-- - A coordination cell (a GRU) that aggregated hidden states and action statistics from the previous agent’s search. This produced a "planning vector" passed to the next agent, allowing agents to condition their search on the decisions of earlier agents. 
-- - A delta network (an MLP) that took the current state, predicted policy, and planning vector to compute a delta — a correction applied to the off-turn agents' actions to make them more coordinated with the current agent
+- A coordination cell (a GRU) that aggregated hidden states and action statistics from the previous agent’s search. This produced a "planning vector" passed to the next agent, allowing agents to condition their search on the decisions of earlier agents. 
+- A delta network (an MLP) that took the current state, predicted policy, and planning vector to compute a delta — a correction applied to the off-turn agents' actions to make them more coordinated with the current agent
 
 **Why I thought it might help:**
 - This idea attempts to mitigate the coordination problem of independent MCTS while still maintaining Centralized Training with Decentralized Execution (CTDE). My hypothesis was that the gap between an optimal (coordinated) policy and a greedy, independent one should be learnable. The delta network would capture this difference and apply it during search to bias agents toward coordinated behavior.
