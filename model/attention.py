@@ -51,25 +51,6 @@ class BaseAttention(fnn.Module):
         raise NotImplementedError("Subclasses must implement the __call__ method.")
 
 
-def sinusoidal_positional_encoding(seq_len: int, d_model: int) -> chex.Array:
-    """
-    Generates a sinusoidal positional encoding matrix.
-
-    Args:
-        seq_len (int): The length of the sequence (e.g., number of agents).
-        d_model (int): The dimensionality of the model/embedding.
-
-    Returns:
-        chex.Array: A (1, seq_len, d_model) positional encoding matrix.
-    """
-    position = jnp.arange(seq_len)[:, jnp.newaxis]
-    div_term = jnp.exp(jnp.arange(0, d_model, 2) * -(jnp.log(10000.0) / d_model))
-    pos_enc = jnp.zeros((seq_len, d_model))
-    pos_enc = pos_enc.at[:, 0::2].set(jnp.sin(position * div_term))
-    pos_enc = pos_enc.at[:, 1::2].set(jnp.cos(position * div_term))
-    return pos_enc[jnp.newaxis, ...]  # Add batch dimension
-
-
 class TransformerEncoderLayer(fnn.Module):
     """A single layer of a Transformer encoder."""
     num_heads: int
@@ -108,10 +89,11 @@ class TransformerAttentionEncoder(BaseAttention):
     """An attention-based encoder to model agent interactions."""
     num_layers: int
     num_heads: int
+    action_space_size: int
     dropout_rate: float = 0.1  
 
     @fnn.compact
-    def __call__(self, x: chex.Array, *, deterministic: bool = False) -> chex.Array:
+    def __call__(self, hidden_states: chex.Array, actions: Optional[chex.Array] = None, *, deterministic: bool = False) -> chex.Array:
         """
         Forward pass for the attention encoder.
 
@@ -121,12 +103,24 @@ class TransformerAttentionEncoder(BaseAttention):
         Returns:
             chex.Array: Output array. Shape: (batch, num_agents, hidden_size)
         """
-        chex.assert_rank(x, 3)  # (batch, num_agents, features)
+        batch_size, num_agents, _ = hidden_states.shape
 
-        x = fnn.Dense(features=self.hidden_size)(x)
+        x = fnn.Dense(
+            features=self.hidden_size, name="state_projector"
+        )(hidden_states)
 
-        pos_encoding = sinusoidal_positional_encoding(seq_len=x.shape[1], d_model=x.shape[2])
-        x = x + pos_encoding
+        if actions is not None:
+            actions_onehot = jax.nn.one_hot(actions, num_classes=self.action_space_size)
+            
+            action_projection = fnn.Dense(
+                features=self.hidden_size, name="action_projector"
+            )(actions_onehot)
+            
+            x = x + action_projection
+
+        agent_ids = jnp.arange(num_agents)
+        agent_id_embeddings = fnn.Embed(num_embeddings=num_agents, features=self.hidden_size)(agent_ids)
+        x = x + agent_id_embeddings[jnp.newaxis, ...]
         x = fnn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
 
         for _ in range(self.num_layers):

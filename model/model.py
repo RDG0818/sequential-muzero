@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import chex
 from model.attention import MLP, BaseAttention, TransformerAttentionEncoder
+from model.policy_attention import AutoregressivePredictionNetwork
 from typing import Tuple, NamedTuple, Optional
 from config import ModelConfig
 
@@ -61,15 +62,12 @@ class DynamicsNetwork(fnn.Module):
         """
         batch_size, num_agents, _ = hidden_states.shape
         actions_onehot = jax.nn.one_hot(actions, num_classes=self.action_space_size)
-        chex.assert_shape(actions_onehot, (batch_size, num_agents, None))
-
-        # Next state prediction
-        dynamic_input = jnp.concatenate([hidden_states, actions_onehot], axis=-1)
 
         if self.attention_module is not None:
-            agent_context = self.attention_module(dynamic_input)
+            agent_context = self.attention_module(hidden_states, actions)
             flat_dynamic_input = agent_context.reshape(batch_size * num_agents, -1)
         else:
+            dynamic_input = jnp.concatenate([hidden_states, actions_onehot], axis=-1)
             flat_dynamic_input = dynamic_input.reshape(batch_size * num_agents, -1)
 
         dynamic_net = MLP(layer_sizes=self.fc_dynamic_layers, output_size=self.hidden_state_size)
@@ -180,14 +178,13 @@ class FlaxMAMuZeroNet(fnn.Module):
     action_space_size: int
 
     def setup(self):
-        attention_module = None
-        if self.config.attention_type == "transformer":
-            attention_module = TransformerAttentionEncoder(
-                num_layers=self.config.attention_layers,
-                num_heads=self.config.attention_heads,
-                hidden_size=self.config.hidden_state_size,
-                dropout_rate=self.config.dropout_rate
-            )
+        self.encoder = TransformerAttentionEncoder(
+            num_layers=self.config.attention_layers,
+            num_heads=self.config.attention_heads,
+            action_space_size=self.action_space_size,
+            hidden_size=self.config.hidden_state_size,
+            dropout_rate=self.config.dropout_rate
+        )
         self.representation_net = RepresentationNetwork(
             hidden_state_size=self.config.hidden_state_size,
             fc_layers=self.config.fc_representation_layers
@@ -198,23 +195,35 @@ class FlaxMAMuZeroNet(fnn.Module):
             reward_support_size=self.config.reward_support_size,
             fc_dynamic_layers=self.config.fc_dynamic_layers,
             fc_reward_layers=self.config.fc_reward_layers,
-            attention_module=attention_module
+            attention_module=self.encoder
         )
-        self.prediction_net = PredictionNetwork(
-            action_space_size=self.action_space_size,
-            value_support_size=self.config.value_support_size,
-            fc_value_layers=self.config.fc_value_layers,
-            fc_policy_layers=self.config.fc_policy_layers
-        )
+        if self.config.policy_type == "transformer":
+            self.prediction_net = AutoregressivePredictionNetwork(
+                encoder=self.encoder,
+                action_space_size=self.action_space_size,
+                value_support_size=self.config.value_support_size,
+                num_decoder_blocks=self.config.decoder_blocks,
+                num_heads=self.config.policy_heads,
+                hidden_state_size=self.config.hidden_state_size,
+                fc_value_layers=self.config.fc_value_layers,
+                dropout_rate=self.config.dropout_rate
+
+            )
+        else:
+            self.prediction_net = PredictionNetwork(
+                action_space_size=self.action_space_size,
+                value_support_size=self.config.value_support_size,
+                fc_value_layers=self.config.fc_value_layers,
+                fc_policy_layers=self.config.fc_policy_layers
+            )
         self.projection_net = ProjectionNetwork(
             projection_hidden_dim=self.config.proj_hid,
             projection_output_dim=self.config.proj_out,
             prediction_hidden_dim=self.config.pred_hid,
             prediction_output_dim=self.config.pred_out
         )
-        self.coordination_cell = fnn.GRUCell(features=self.config.hidden_state_size)
 
-    def __call__(self, observations: chex.Array) -> MuZeroOutput:
+    def __call__(self, observations: chex.Array, key) -> MuZeroOutput:
         """
         Initial inference step.
 
@@ -233,7 +242,12 @@ class FlaxMAMuZeroNet(fnn.Module):
         flat_obs = observations.reshape(batch_size * num_agents, -1)
         hidden_states = self.representation_net(flat_obs).reshape(batch_size, num_agents, -1)
 
-        policy_logits, value_logits = self.prediction_net(hidden_states)
+        if self.config.policy_type == "transformer":
+            policy_logits, value_logits = self.prediction_net.generate(
+                hidden_states, key=key, deterministic=True
+            )
+        else:
+            policy_logits, value_logits = self.prediction_net(hidden_states)
         reward_logits = jnp.zeros((batch_size, self.config.reward_support_size * 2 + 1))
 
         if self.is_mutable_collection('params'): # Initialize all parameters
@@ -241,9 +255,6 @@ class FlaxMAMuZeroNet(fnn.Module):
             self.dynamics_net(hidden_states, dummy_actions)
             self.project(hidden_states, with_prediction_head=True)
             self.project(hidden_states, with_prediction_head=False)
-            dummy_coord_state = jnp.zeros((batch_size, self.config.hidden_state_size))
-            dummy_plan_summary = jnp.zeros((batch_size, self.action_space_size))
-            self.coordinate(dummy_coord_state, dummy_plan_summary)
 
         return MuZeroOutput(
             hidden_state=hidden_states,
@@ -252,7 +263,7 @@ class FlaxMAMuZeroNet(fnn.Module):
             value_logits=value_logits
         )
 
-    def recurrent_inference(self, hidden_states: chex.Array, actions: chex.Array) -> MuZeroOutput:
+    def recurrent_inference(self, hidden_states: chex.Array, actions: chex.Array, key) -> MuZeroOutput:
         """
         Projects a latent state forward in time using an action.
 
@@ -269,8 +280,12 @@ class FlaxMAMuZeroNet(fnn.Module):
         """
 
         next_hidden_states, reward_logits = self.dynamics_net(hidden_states, actions)
-
-        policy_logits, value_logits = self.prediction_net(next_hidden_states)
+        if self.config.policy_type == "transformer":
+            policy_logits, value_logits = self.prediction_net.generate(
+                next_hidden_states, key=key, deterministic=True
+            )
+        else:
+            policy_logits, value_logits = self.prediction_net(next_hidden_states)
 
         return MuZeroOutput(
             hidden_state=next_hidden_states,
@@ -278,9 +293,20 @@ class FlaxMAMuZeroNet(fnn.Module):
             policy_logits=policy_logits,
             value_logits=value_logits
         )
+    
+    @fnn.compact
+    def train_prediction(self, hidden_states: chex.Array, actions: chex.Array) -> Tuple[chex.Array, chex.Array]:
+        """
+        Performs the forward pass for the prediction network during training.
+        This uses teacher-forcing for the autoregressive model.
+        """
+        if self.config.policy_type == "transformer":
+            policy_logits, value_logits = self.prediction_net(
+                hidden_states, actions, train=True
+            )
+        else:
+            policy_logits, value_logits = self.prediction_net(hidden_states)
 
-    def predict(self, hidden_states: chex.Array) -> Tuple[chex.Array, chex.Array]:
-        policy_logits, value_logits = self.prediction_net(hidden_states)
         return policy_logits, value_logits
     
     def project(self, hidden_state: chex.Array, with_prediction_head: bool = True) -> chex.Array:
@@ -300,8 +326,4 @@ class FlaxMAMuZeroNet(fnn.Module):
         else:
             return proj
         
-    def coordinate(self, carry: chex.Array, plan_summary: chex.Array) -> Tuple[chex.Array, chex.Array]:
-        """Updates the coordination context using the standard GRU cell."""
-        new_carry, output = self.coordination_cell(carry, plan_summary)
-        return new_carry, output
     

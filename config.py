@@ -15,10 +15,12 @@ class ModelConfig:
     fc_reward_layers: Tuple[int, ...] = (32,)
     fc_value_layers: Tuple[int, ...] = (32,)
     fc_policy_layers: Tuple[int, ...] = (32,)
-    attention_type: str = "transformer"  # "transformer" or "none"
+    policy_type: str = "transformer"  # "transformer" or "mlp"
     attention_layers: int = 1
     attention_heads: int = 1
     dropout_rate: float = 0.1
+    decoder_blocks: int = 2
+    policy_heads: int = 2
     proj_hid: int = 256
     proj_out: int = 256
     pred_hid: int = 64
