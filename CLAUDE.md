@@ -10,11 +10,16 @@ conda create -n mazero python=3.10.18 && conda activate mazero
 pip install -r requirements.txt
 wandb login  # set wandb_mode to "online" in configs/train/default.yaml to enable
 
-# Run training
+# Run training (async Ray, CPU MCTS)
 python train.py                                  # default config
 python train.py mcts=joint                       # switch to joint planner
 python train.py train.num_episodes=50000         # override single value
 python train.py train.batch_size=128 mcts.num_simulations=50
+
+# Run training (pure-JAX, GPU MCTS, Flashbax buffer)
+python train_jax.py                              # default config
+python train_jax.py train=jax                    # JAX preset (32 envs, batch=512)
+python train_jax.py train.num_envs=64            # override env count
 
 # Evaluate a checkpoint
 python eval.py                                   # latest checkpoint, default config
@@ -39,7 +44,8 @@ Violating these rules causes silent failures or segfaults that are difficult to 
 ## Package Layout
 
 ```
-train.py                  # entry point (@hydra.main, builds ExperimentConfig, launches Ray actors)
+train.py                  # entry point — async Ray actor-learner (CPU MCTS)
+train_jax.py              # entry point — pure-JAX synchronous (GPU MCTS + Flashbax buffer)
 eval.py                   # standalone eval: loads checkpoint, runs N MCTS episodes, logs return
 train_ippo.py             # entry point for IPPO baseline (pure JAX, no Ray)
 train_mappo.py            # entry point for MAPPO baseline (pure JAX, no Ray)
@@ -64,6 +70,7 @@ baselines/
   mappo.py                # MAPPO: GAE + PPO clip, decentralized actor + centralized critic
 training/
   loop.py                 # run_warmup(), run_training_loop(), run_training_loop_sync()
+  loop_jax.py             # run_training_loop_jax(): pure-JAX GPU loop with Flashbax
 model/
   model.py                # FlaxMAMuZeroNet and sub-networks
   attention.py            # TransformerAttentionEncoder

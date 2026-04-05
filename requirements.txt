@@ -10,3 +10,4 @@ loguru
 orbax-checkpoint
 hydra-core
 distrax
+flashbax

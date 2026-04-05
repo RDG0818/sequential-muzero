@@ -24,6 +24,7 @@ wandb_mode: disabled  # "online" or "disabled"
 project_name: myzero1
 checkpoint_dir: checkpoints
 checkpoint_interval: 2500
+num_envs: 16           # total parallel envs for JAX training (train_jax.py)
 num_envs_per_actor: 4  # parallel environments per DataActor
 ema_decay: 0.999       # EMA decay for target encoder (BYOL-style consistency loss)
 num_reanalyze_actors: 1

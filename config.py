@@ -66,6 +66,7 @@ class TrainConfig:
     project_name: str = "myzero1"
     checkpoint_dir: str = "checkpoints"
     checkpoint_interval: int = 1000
+    num_envs: int = 16           # total parallel envs for JAX training (train_jax.py)
     num_envs_per_actor: int = 4  # number of parallel environments per DataActor
     sync: bool = False           # use synchronous training loop (simpler but ~2-3x slower)
     ema_decay: float = 0.999     # EMA decay for target encoder (BYOL-style consistency loss)
