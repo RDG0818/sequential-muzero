@@ -1,0 +1,61 @@
+model:
+  hidden_state_size: 128
+  value_support_size: 20
+  reward_support_size: 5
+  fc_representation_layers:
+  - 128
+  fc_dynamic_layers:
+  - 128
+  fc_reward_layers:
+  - 32
+  fc_value_layers:
+  - 32
+  fc_policy_layers:
+  - 32
+  attention_type: transformer
+  attention_layers: 1
+  attention_heads: 1
+  dropout_rate: 0.1
+  proj_hid: 256
+  proj_out: 256
+  pred_hid: 64
+  pred_out: 256
+mcts:
+  planner_mode: joint
+  num_simulations: 50
+  max_depth_gumbel_search: 10
+  num_gumbel_samples: 10
+  dirichlet_alpha: 0.3
+  dirichlet_fraction: 0.25
+  independent_argmax: true
+train:
+  env_name: MPE_simple_spread_v3
+  num_agents: 3
+  num_episodes: 100000
+  warmup_episodes: 1000
+  log_interval: 100
+  num_actors: 3
+  max_episode_steps: 25
+  replay_buffer_size: 100000
+  replay_buffer_alpha: 0.6
+  replay_buffer_beta_start: 0.4
+  replay_buffer_beta_frames: 100000
+  batch_size: 256
+  learning_rate: 0.0003
+  param_update_interval: 20
+  end_lr_factor: 0.1
+  lr_warmup_steps: 5000
+  value_scale: 0.25
+  consistency_scale: 1.0
+  gradient_clip_norm: 5.0
+  unroll_steps: 5
+  n_step: 10
+  discount_gamma: 0.99
+  wandb_mode: disabled
+  project_name: myzero1
+  checkpoint_dir: checkpoints
+  checkpoint_interval: 2500
+  num_envs_per_actor: 4
+  ema_decay: 0.999
+  debug: false
+  debug_interval: 100
