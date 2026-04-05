@@ -288,13 +288,23 @@ def run_training_loop_jax(config: ExperimentConfig, obs_size: int, action_size: 
     metrics = {}
 
     logger.info(f"Starting pure-JAX training loop: {B} envs, {T} steps/episode.")
+    logger.info(f"JAX devices: {jax.devices()} | default backend: {jax.default_backend()}")
     logger.info("XLA compiling collect_episode (first call) — this may take several minutes. "
                 "Subsequent episodes will be fast.")
     compile_start = time.monotonic()
 
+    # Profile first few episodes to identify bottlenecks.
+    _PROFILE_EPS = 5
+
     for ep in range(config.train.num_episodes):
+        _profile = ep < _PROFILE_EPS
+        _t = time.monotonic() if _profile else 0.0
+
         # 1. Collect episode — MCTS + env on GPU
         rng, traj = collect_episode(params, rng)
+        jax.block_until_ready(traj)  # wait for GPU to finish before timing the next op
+        if _profile:
+            t_collect = time.monotonic() - _t; _t = time.monotonic()
 
         if ep == 0:
             compile_time = time.monotonic() - compile_start
@@ -308,9 +318,21 @@ def run_training_loop_jax(config: ExperimentConfig, obs_size: int, action_size: 
 
         # 3. Process trajectory → flat replay items (on GPU)
         items = process_traj(traj)
+        jax.block_until_ready(items)
+        if _profile:
+            t_process = time.monotonic() - _t; _t = time.monotonic()
 
         # 4. Add to buffer (Flashbax assigns max priority to new items by default)
         buffer_state = buffer.add(buffer_state, items)
+        jax.block_until_ready(buffer_state)
+        if _profile:
+            t_add = time.monotonic() - _t
+            logger.info(
+                f"[profile ep={ep}] collect={t_collect:.3f}s  process={t_process:.3f}s  "
+                f"buf_add={t_add:.3f}s  |  "
+                f"traj.obs.device={traj.obs.devices()}  "
+                f"traj shape=(T={traj.obs.shape[0]}, B={traj.obs.shape[1]})"
+            )
 
         # 5. Train if buffer is warm
         if buffer.can_sample(buffer_state) and ep >= config.train.warmup_episodes:
