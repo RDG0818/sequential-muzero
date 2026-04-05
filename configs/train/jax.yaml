@@ -1,6 +1,6 @@
 # Overrides for pure-JAX GPU training (train_jax.py).
 # All other train params inherit from default.yaml.
-num_envs: 32
+num_envs: 128
 batch_size: 512
 warmup_episodes: 200
 num_actors: 0

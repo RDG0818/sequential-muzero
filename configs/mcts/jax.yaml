@@ -1,0 +1,10 @@
+# Fast MCTS preset for pure-JAX GPU training.
+# Fewer simulations reduce collect_episode time proportionally.
+# GPU MCTS benefits from larger batch sizes (num_envs) not deeper search.
+planner_mode: independent
+num_simulations: 10
+max_depth_gumbel_search: 5
+num_gumbel_samples: 5
+dirichlet_alpha: 0.3
+dirichlet_fraction: 0.25
+independent_argmax: true
