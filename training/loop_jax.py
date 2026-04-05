@@ -3,7 +3,7 @@ Pure-JAX synchronous training loop for Multi-Agent MuZero.
 
 Replaces the Ray async actor-learner system with a single-process, GPU-resident
 pipeline:
-  1. collect_episode()    — JIT-compiled; MCTS + env steps on GPU via jax.lax.scan
+  1. collect_episode()    — Python loop calling JIT-compiled plan_fn each step (GPU MCTS)
   2. process_trajectory() — JIT-compiled; sliding window + n-step returns on GPU
   3. Flashbax buffer      — JAX-native prioritised item buffer, lives on GPU
   4. train_step()         — JIT-compiled; unchanged from actors/learner_actor.py
@@ -38,53 +38,68 @@ class Trajectory(NamedTuple):
 
 
 def make_collect_episode(plan_fn, env, num_envs: int, max_episode_steps: int):
-    """Returns a JIT-compiled episode collection function.
+    """Returns an episode collection function.
 
-    The returned function resets all envs, then runs a jax.lax.scan over
-    max_episode_steps steps. MCTS planning and env transitions run entirely
-    on GPU.
+    Uses a Python loop so that plan_fn (JIT-compiled separately) is called as
+    a lightweight reusable kernel each step rather than being inlined into one
+    massive XLA program via jax.lax.scan.
 
     Args:
         plan_fn:            JIT-compiled planner.plan function.
         env:                VecMPEEnvWrapper instance.
         num_envs:           Number of parallel environments.
-        max_episode_steps:  Length of each episode scan (fixed).
+        max_episode_steps:  Maximum steps per episode.
 
     Returns:
         collect_episode(params, rng) -> (rng, Trajectory)
     """
 
-    @jax.jit
     def collect_episode(params, rng: jax.Array):
         rng, reset_key = jax.random.split(rng)
         obs, env_state = env.reset(jax.random.split(reset_key, num_envs))
         active = jnp.ones(num_envs, dtype=bool)
 
-        def step(carry, _):
-            obs, env_state, rng, active = carry
+        obs_list          = []
+        actions_list      = []
+        policy_targets_list = []
+        root_values_list  = []
+        agent_orders_list = []
+        rewards_list      = []
+        dones_list        = []
+        active_list       = []
+
+        for _ in range(max_episode_steps):
             rng, plan_key, step_key = jax.random.split(rng, 3)
             plan_output = plan_fn(params, plan_key, obs)
             next_obs, next_state, rewards, dones = env.step(
                 jax.random.split(step_key, num_envs), env_state, plan_output.joint_action
             )
-            # agent_order is (N,) — broadcast to (B, N) for uniform per-env storage
             agent_order_b = jnp.broadcast_to(
                 plan_output.agent_order[None], (num_envs, plan_output.agent_order.shape[0])
             )
-            out = Trajectory(
-                obs=obs,
-                actions=plan_output.joint_action,
-                policy_targets=plan_output.policy_targets,
-                root_values=plan_output.root_value,
-                agent_orders=agent_order_b,
-                rewards=rewards,
-                dones=dones,
-                active=active,              # snapshot before this step's done update
-            )
-            return (next_obs, next_state, rng, active & ~dones), out
 
-        (_, _, rng, _), traj = jax.lax.scan(
-            step, (obs, env_state, rng, active), None, max_episode_steps
+            obs_list.append(obs)
+            actions_list.append(plan_output.joint_action)
+            policy_targets_list.append(plan_output.policy_targets)
+            root_values_list.append(plan_output.root_value)
+            agent_orders_list.append(agent_order_b)
+            rewards_list.append(rewards)
+            dones_list.append(dones)
+            active_list.append(active)
+
+            obs = next_obs
+            env_state = next_state
+            active = active & ~dones
+
+        traj = Trajectory(
+            obs=jnp.stack(obs_list, axis=0),
+            actions=jnp.stack(actions_list, axis=0),
+            policy_targets=jnp.stack(policy_targets_list, axis=0),
+            root_values=jnp.stack(root_values_list, axis=0),
+            agent_orders=jnp.stack(agent_orders_list, axis=0),
+            rewards=jnp.stack(rewards_list, axis=0),
+            dones=jnp.stack(dones_list, axis=0),
+            active=jnp.stack(active_list, axis=0),
         )
         return rng, traj  # each field: (T, B, ...)
 
