@@ -38,37 +38,34 @@ class Trajectory(NamedTuple):
 
 
 def make_collect_episode(plan_fn, env, num_envs: int, max_episode_steps: int):
-    """Returns an episode collection function.
+    """Returns a JIT-compiled episode collection function.
 
-    Uses a Python loop so that plan_fn (JIT-compiled separately) is called as
-    a lightweight reusable kernel each step rather than being inlined into one
-    massive XLA program via jax.lax.scan.
+    Uses jax.lax.scan so the entire episode (MCTS + env steps) compiles into
+    a single XLA program that runs without Python dispatch overhead per step.
+    This avoids the CPU bottleneck that arises when Python dispatches GPU kernels
+    in a Python loop (which idles the GPU between each plan_fn call).
+
+    Compilation is slow on the first call (~minutes for large MCTS configs) but
+    amortized to zero over a long training run.
 
     Args:
         plan_fn:            JIT-compiled planner.plan function.
         env:                VecMPEEnvWrapper instance.
         num_envs:           Number of parallel environments.
-        max_episode_steps:  Maximum steps per episode.
+        max_episode_steps:  Length of each episode scan (fixed).
 
     Returns:
         collect_episode(params, rng) -> (rng, Trajectory)
     """
 
+    @jax.jit
     def collect_episode(params, rng: jax.Array):
         rng, reset_key = jax.random.split(rng)
         obs, env_state = env.reset(jax.random.split(reset_key, num_envs))
         active = jnp.ones(num_envs, dtype=bool)
 
-        obs_list          = []
-        actions_list      = []
-        policy_targets_list = []
-        root_values_list  = []
-        agent_orders_list = []
-        rewards_list      = []
-        dones_list        = []
-        active_list       = []
-
-        for _ in range(max_episode_steps):
+        def step(carry, _):
+            obs, env_state, rng, active = carry
             rng, plan_key, step_key = jax.random.split(rng, 3)
             plan_output = plan_fn(params, plan_key, obs)
             next_obs, next_state, rewards, dones = env.step(
@@ -77,29 +74,20 @@ def make_collect_episode(plan_fn, env, num_envs: int, max_episode_steps: int):
             agent_order_b = jnp.broadcast_to(
                 plan_output.agent_order[None], (num_envs, plan_output.agent_order.shape[0])
             )
+            out = Trajectory(
+                obs=obs,
+                actions=plan_output.joint_action,
+                policy_targets=plan_output.policy_targets,
+                root_values=plan_output.root_value,
+                agent_orders=agent_order_b,
+                rewards=rewards,
+                dones=dones,
+                active=active,
+            )
+            return (next_obs, next_state, rng, active & ~dones), out
 
-            obs_list.append(obs)
-            actions_list.append(plan_output.joint_action)
-            policy_targets_list.append(plan_output.policy_targets)
-            root_values_list.append(plan_output.root_value)
-            agent_orders_list.append(agent_order_b)
-            rewards_list.append(rewards)
-            dones_list.append(dones)
-            active_list.append(active)
-
-            obs = next_obs
-            env_state = next_state
-            active = active & ~dones
-
-        traj = Trajectory(
-            obs=jnp.stack(obs_list, axis=0),
-            actions=jnp.stack(actions_list, axis=0),
-            policy_targets=jnp.stack(policy_targets_list, axis=0),
-            root_values=jnp.stack(root_values_list, axis=0),
-            agent_orders=jnp.stack(agent_orders_list, axis=0),
-            rewards=jnp.stack(rewards_list, axis=0),
-            dones=jnp.stack(dones_list, axis=0),
-            active=jnp.stack(active_list, axis=0),
+        (_, _, rng, _), traj = jax.lax.scan(
+            step, (obs, env_state, rng, active), None, max_episode_steps
         )
         return rng, traj  # each field: (T, B, ...)
 
@@ -300,10 +288,19 @@ def run_training_loop_jax(config: ExperimentConfig, obs_size: int, action_size: 
     metrics = {}
 
     logger.info(f"Starting pure-JAX training loop: {B} envs, {T} steps/episode.")
+    logger.info("XLA compiling collect_episode (first call) — this may take several minutes. "
+                "Subsequent episodes will be fast.")
+    compile_start = time.monotonic()
 
     for ep in range(config.train.num_episodes):
         # 1. Collect episode — MCTS + env on GPU
         rng, traj = collect_episode(params, rng)
+
+        if ep == 0:
+            compile_time = time.monotonic() - compile_start
+            logger.info(f"First episode done (includes XLA compilation): {compile_time:.1f}s. "
+                        f"Measuring throughput from ep 1 onward.")
+            interval_start = time.monotonic()  # reset so ep 0 compile time doesn't skew eps/s
 
         # 2. Episode return for logging (single scalar pull to CPU)
         ep_return = float(jnp.mean((traj.rewards * traj.active).sum(axis=0)))
@@ -382,9 +379,9 @@ def run_training_loop_jax(config: ExperimentConfig, obs_size: int, action_size: 
             ckpt_manager.wait_until_finished()
             logger.info(f"Saved checkpoint at step {train_step_count}.")
 
-        # 7. Log every log_interval episodes
+        # 7. Log every log_interval episodes (skip ep 0 — compile time skews eps/s)
         prev = ep - 1
-        if ep // config.train.log_interval > prev // config.train.log_interval and returns:
+        if ep > 0 and ep // config.train.log_interval > prev // config.train.log_interval and returns:
             avg_return = float(np.mean(returns))
             avg_loss   = float(np.mean(train_losses)) if train_losses else float("nan")
             elapsed    = time.monotonic() - interval_start
