@@ -37,7 +37,7 @@ class MCTSConfig:
     dirichlet_fraction: float
     independent_argmax: bool
     use_root_communication: bool
-    mcts_rho: float = 0.75    # OS(λ): top quantile fraction to keep (1-rho is discarded)
+    mcts_rho: float = 0.25    # OS(λ): top quantile fraction to DISCARD (1-rho is the fraction kept)
     mcts_lambda: float = 0.8  # OS(λ): depth discount weight (lambda^depth)
     pb_c_base: float = 19652.0   # UCB: log-visit exploration scaling (MuZero/MAZero standard)
     pb_c_init: float = 1.25     # UCB: base exploration constant (MuZero/MAZero standard)

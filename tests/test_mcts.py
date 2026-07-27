@@ -622,7 +622,19 @@ class TestUCBLogVisitScaling:
         assert jnp.allclose(value_scores, jnp.array([0.0, 0.5, 1.0]), atol=1e-3)
 
     def test_unvisited_children_get_zero_value_score(self):
-        """Matches MAZero: `if (child->visit_count == 0) value_score = 0`."""
+        """This repo scores unvisited children with a hard value_score=0,
+        skipping normalization entirely for them. MAZero's cnode.cpp also sets
+        the pre-normalization value_score=0 for unvisited children, but then
+        still runs it through minmax_stat.normalize() and clips to [0,1] — so
+        MAZero's actual unvisited-child score is normalize(0), not a hard 0.
+        This is a deliberate, standard-MuZero-pseudocode divergence from
+        MAZero, not a bug: when qmin < 0 (true for this repo's [-5,5] value
+        support), normalize(0) > 0, so MAZero scores unvisited children
+        slightly higher than this repo does. Left as-is per code review
+        (2026-07 MCTS correctness audit whole-branch review) — revisit only
+        if search quality issues trace back to under-exploration of new
+        children.
+        """
         from mcts.mcts_joint_osla import compute_ucb_scores
 
         child_q_diff = jnp.array([100.0, 100.0])  # would be huge if not masked
@@ -638,6 +650,132 @@ class TestUCBLogVisitScaling:
         expected_prior_score = pb_c * 0.5
         assert jnp.allclose(ucb, expected_prior_score, atol=1e-3), (
             "unvisited children should score purely on the prior term (value_score=0)"
+        )
+
+    def test_all_zero_ucb_when_parent_visits_zero_and_children_unvisited(self):
+        """Documents the exact degenerate input _best_ucb hits at every
+        node's first internal descent: parent_visits=0 (a just-expanded
+        node, visit_count==1) makes pb_c*sqrt(parent_visits)=0 for every
+        child, and all children being unvisited makes value_score=0 too —
+        so compute_ucb_scores itself really does return an all-zero
+        vector here. The caller (_best_ucb) is responsible for not letting
+        bare jnp.argmax on this vector silently ignore the prior."""
+        from mcts.mcts_joint_osla import compute_ucb_scores
+
+        child_visits = jnp.zeros(4)
+        prior_probs = jnp.array([0.05, 0.05, 0.05, 0.85])
+        ucb = compute_ucb_scores(
+            jnp.zeros(4), child_visits, prior_probs, parent_visits=jnp.array(0.0),
+            qmin=jnp.array(1e9), qmax=jnp.array(-1e9),
+            pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01,
+        )
+        assert jnp.allclose(ucb, jnp.zeros(4)), (
+            f"expected all-zero UCB vector for parent_visits=0, got {ucb}"
+        )
+        # Bare argmax on an all-zero vector always returns index 0,
+        # regardless of prior — this is the bug. _best_ucb's tie-break
+        # (jnp.argmax(ucb + 1e-6 * prior_probs)) must instead resolve to
+        # the highest-prior child (index 3 here).
+        bare_argmax_choice = int(jnp.argmax(ucb))
+        assert bare_argmax_choice == 0, (
+            "sanity check: bare argmax on all-zero UCB is index 0 regardless of prior "
+            "(this is the behavior being fixed, not the desired one)"
+        )
+        tiebreak_choice = int(jnp.argmax(ucb + 1e-6 * prior_probs))
+        assert tiebreak_choice == 3, (
+            f"tie-break should resolve to the highest-prior child (index 3), got {tiebreak_choice}"
+        )
+
+
+class TestUCBZeroScoreTiebreakEndToEnd:
+    """End-to-end regression test for the _best_ucb tie-break fix, built via
+    a hand-constructed OSLATree/SimCarry and a real _run_single_sim call
+    (following TestRootRoundRobin's pattern), rather than testing
+    compute_ucb_scores in isolation. Confirms the fix actually changes
+    which child gets expanded inside the real selection/expansion path,
+    not just that the standalone UCB formula produces zeros."""
+
+    def test_internal_node_expansion_respects_prior_not_index_zero(self):
+        """Construct a 2-level tree: root (node 0) has one already-expanded
+        child (node 1, visit_count=1) whose own K children are all
+        unvisited. Root's prior overwhelmingly favors descending into node
+        1 (parent_visits large there, so root's own UCB is non-degenerate
+        and deterministically picks that child). But once selection
+        reaches node 1, parent_visits = visit_count(node1) - 1 = 0, making
+        compute_ucb_scores return an all-zero vector for node 1's
+        children — exactly the degenerate case from
+        test_all_zero_ucb_when_parent_visits_zero_and_children_unvisited.
+        Node 1's own children have a skewed prior favoring index 3; the
+        tie-break must expand index 3, not always index 0."""
+        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry
+        import mctx
+
+        K, A_N, N, D, max_depth, gamma = 4, 25, 2, 8, 3, 0.99
+        max_nodes = K + 2
+
+        def fake_recurrent_fn(params, rng, flat_action, embedding):
+            B = flat_action.shape[0]
+            return (
+                mctx.RecurrentFnOutput(
+                    reward=jnp.zeros((B,)),
+                    discount=jnp.ones((B,)),
+                    prior_logits=jnp.zeros((B, A_N)),
+                    value=jnp.zeros((B,)),
+                ),
+                embedding,
+            )
+
+        visit_counts = jnp.zeros(max_nodes, jnp.int32).at[0].set(50).at[1].set(1)
+        child_node_idx = jnp.full((max_nodes, K), -1, jnp.int32).at[0, 0].set(1)
+        child_prior_prob = jnp.zeros((max_nodes, K))
+        # Root: position 0 (-> node 1) has overwhelming prior so root's own
+        # (non-degenerate, parent_visits=49) UCB deterministically descends
+        # into node 1, regardless of the tie-break epsilon.
+        child_prior_prob = child_prior_prob.at[0].set(jnp.array([0.999, 0.0003, 0.0003, 0.0004]))
+        # Node 1: all children unvisited, skewed prior favoring index 3.
+        child_prior_prob = child_prior_prob.at[1].set(jnp.array([0.05, 0.05, 0.05, 0.85]))
+        child_actions = jnp.zeros((max_nodes, K), jnp.int32)
+        child_actions = child_actions.at[0].set(jnp.arange(K))
+        child_actions = child_actions.at[1].set(jnp.arange(K, 2 * K))
+
+        tree = OSLATree(
+            visit_counts=visit_counts,
+            value_sum=jnp.zeros(max_nodes),
+            reward=jnp.zeros(max_nodes),
+            pred_value=jnp.zeros(max_nodes),
+            embedding=jnp.zeros((max_nodes, N, D)),
+            depth=jnp.zeros(max_nodes, jnp.int32).at[1].set(1),
+            parent=jnp.full(max_nodes, -1, jnp.int32).at[1].set(0),
+            child_actions=child_actions,
+            child_node_idx=child_node_idx,
+            child_prior_prob=child_prior_prob,
+            node_sim_values=jnp.zeros((max_nodes, K + 1)),
+            node_sim_depths=jnp.zeros((max_nodes, K + 1), jnp.int32),
+        )
+
+        carry = SimCarry(
+            tree=tree, next_free=jnp.array(2, jnp.int32), rng=jax.random.PRNGKey(3),
+            sim_depths=jnp.zeros(1, jnp.int32), sim_values=jnp.zeros(1, jnp.float32),
+            qmin=jnp.array(1e9), qmax=jnp.array(-1e9),
+        )
+
+        result = _run_single_sim(
+            carry, jnp.array(0), None, fake_recurrent_fn,
+            K, A_N, max_depth, gamma,
+            pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01, rho=0.25, lam=0.8,
+        )
+
+        # Whichever position of node 1's children got expanded should be
+        # the highest-prior one (index 3), not index 0.
+        expanded_positions = jnp.where(result.tree.child_node_idx[1] >= 0)[0]
+        assert len(expanded_positions) == 1, (
+            f"expected exactly one of node 1's children to be expanded, "
+            f"got {result.tree.child_node_idx[1]}"
+        )
+        assert int(expanded_positions[0]) == 3, (
+            f"expected the highest-prior child (index 3) to be expanded, "
+            f"got index {int(expanded_positions[0])} "
+            f"(child_node_idx[1] = {result.tree.child_node_idx[1]})"
         )
 
 

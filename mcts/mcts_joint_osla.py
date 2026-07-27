@@ -23,34 +23,28 @@ def compute_osla_value_jax(
 ) -> chex.Array:
     """JAX-native OS(λ), matching MAZero's `SubTreeValueSet`: the top
     (1-rho) quantile is selected SEPARATELY within each depth bucket, then
-    buckets are combined with lambda^depth weighting. Pooling all depths
-    together before ranking (the previous behavior) lets one depth's
-    naturally larger/smaller value scale dominate which sims count as "top",
-    instead of comparing sims fairly within their own depth bucket.
+    buckets are combined with lambda^depth weighting. Uses a single global
+    sort plus a per-bucket cumulative rank (rather than one argsort per
+    depth bucket) to stay O(max_sims log max_sims) instead of
+    O(max_depth * max_sims log max_sims).
     """
     max_sims = sim_values.shape[0]
     valid_mask = jnp.arange(max_sims) < n_visits
 
-    def bucket_contribution(d):
-        depth_mask = valid_mask & (sim_depths == d)
-        count_d = depth_mask.sum()
-        size_lim = jnp.maximum(
-            1, jnp.ceil(count_d.astype(jnp.float32) * (1.0 - rho)).astype(jnp.int32)
-        )
-        masked_vals = jnp.where(depth_mask, sim_values, -jnp.inf)
-        order = jnp.argsort(masked_vals)[::-1]
-        ranked_mask = depth_mask[order]
-        rank = jnp.arange(max_sims)
-        include = (rank < size_lim) & ranked_mask
-        sorted_vals = sim_values[order]
-        weight = lam ** jnp.float32(d)
-        has_any = count_d > 0
-        bucket_sum = jnp.where(has_any, jnp.where(include, sorted_vals, 0.0).sum() * weight, 0.0)
-        bucket_count = jnp.where(has_any, include.sum().astype(jnp.float32) * weight, 0.0)
-        return bucket_sum, bucket_count
+    order = jnp.argsort(jnp.where(valid_mask, sim_values, -jnp.inf))[::-1]
+    v_s = sim_values[order]
+    d_s = sim_depths[order]
+    m_s = valid_mask[order]
 
-    bucket_sums, bucket_counts = jax.vmap(bucket_contribution)(jnp.arange(max_depth))
-    return bucket_sums.sum() / (bucket_counts.sum() + 1e-8)
+    onehot = jax.nn.one_hot(d_s, max_depth) * m_s[:, None]           # [max_sims, max_depth]
+    rank_in_bucket = (jnp.cumsum(onehot, axis=0) - 1.0)[jnp.arange(max_sims), d_s]
+    counts = onehot.sum(axis=0)                                      # [max_depth]
+    size_lim = jnp.maximum(1, jnp.ceil(counts * (1.0 - rho))).astype(jnp.int32)
+
+    include = m_s & (rank_in_bucket < size_lim[d_s])
+    weight = jnp.where(include, lam ** d_s.astype(jnp.float32), 0.0)
+
+    return (v_s * weight).sum() / (weight.sum() + 1e-8)
 
 
 def compute_osla_value(
@@ -178,7 +172,7 @@ def _run_single_sim(
     A_N: int,                     # static
     max_depth: int,               # static
     gamma: float,
-    rho: float = 0.75,
+    rho: float = 0.25,
     lam: float = 0.8,
     pb_c_base: float = 19652.0,
     pb_c_init: float = 1.25,
@@ -222,7 +216,15 @@ def _run_single_sim(
             child_q_baseline_diff, child_visits, prior_probs, parent_visits,
             carry.qmin, carry.qmax, pb_c_base, pb_c_init, value_delta_lb,
         )
-        ucb_choice = jnp.argmax(ucb).astype(jnp.int32)
+        # Tie-break toward the highest-prior child: when a node has just
+        # been expanded (visit_count==1), parent_visits=0 makes pb_c=0 for
+        # every child, and unvisited children also score value_score=0, so
+        # the whole UCB vector is [0, ..., 0]. Without this epsilon,
+        # argmax would deterministically pick index 0 regardless of prior,
+        # defeating prior-guided exploration at every node's first
+        # internal descent. 1e-6 is small enough to only break exact ties,
+        # not perturb genuine UCB comparisons.
+        ucb_choice = jnp.argmax(ucb + 1e-6 * prior_probs).astype(jnp.int32)
         is_root = node_idx == 0
         root_visits = tree.visit_counts[0]
         round_robin_active = is_root & (root_visits <= K)
