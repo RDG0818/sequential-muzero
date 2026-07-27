@@ -466,13 +466,25 @@ def test_mcts_config_has_osla_fields():
 class TestComputeOslaValue:
     """Tests for the OS(λ) value aggregation function."""
 
-    def test_all_same_depth_rho_one_equals_mean(self):
-        """When all sims reach same depth, OS(λ) with rho=1.0 = plain mean."""
+    def test_all_same_depth_rho_zero_equals_mean(self):
+        """When all sims reach same depth, OS(λ) with rho=0.0 (discard nothing) = plain mean.
+
+        NOTE: prior to Task 4, this test used rho=1.0 and relied on a
+        `rho >= 1.0 -> keep all` special case that was never part of MAZero's
+        `SubTreeValueSet` (verified against `../MAZero/core/mcts/ctree/common_lib/utils.cpp`,
+        which always computes `size_lim = max(1, ceil(count[depth] * (1 - rho)))`
+        with no special-casing of rho). That special case embodied exactly the
+        "rho as keep-fraction" confusion the Task 4 brief calls out (rho is the
+        *discard* fraction: rho=0.0 discards nothing => keeps everything; the
+        old test's premise "rho=1.0 keeps all" had this backwards). Updated to
+        rho=0.0, which is the fraction that actually keeps every sim under the
+        MAZero-faithful formula.
+        """
         from mcts.mcts_joint_osla import compute_osla_value
         depths = jnp.array([1, 1, 1, 1], dtype=jnp.int32)
         values = jnp.array([0.0, 0.0, 0.0, 1.0], dtype=jnp.float32)
-        # rho=1.0: keep all 4, mean = 0.25
-        v = compute_osla_value(depths, values, rho=1.0, lam=0.8)
+        # rho=0.0: keep all 4, mean = 0.25
+        v = compute_osla_value(depths, values, rho=0.0, lam=0.8)
         assert jnp.allclose(v, 0.25, atol=1e-4)
 
     def test_top_rho_amplifies_rare_wins(self):
@@ -554,6 +566,58 @@ class TestOSLAHelpers:
         assert len(leaves) == 11  # 9 original + 2 new fields
         tree2 = treedef.unflatten(leaves)
         assert jnp.array_equal(tree2.visit_counts, tree.visit_counts)
+
+
+class TestOSLAPerDepthQuantile:
+
+    def test_top_quantile_selected_within_depth_bucket_not_pooled(self):
+        """Two sims at depth 0 with small values, one sim at depth 3 with a
+        huge value. Pooled-across-depths ranking (the old behavior) would
+        let the depth-3 outlier dominate the global top-quantile regardless
+        of its own bucket size. Per-depth-bucket ranking (MAZero's
+        SubTreeValueSet) keeps the depth-3 sim's bucket separate: with only
+        one sim at depth 3, size_lim=1, so it's fully included in its own
+        bucket either way — but a depth-0 value that's LARGER than any
+        depth-0 peer must still be selected as "top" for depth 0, even
+        if it's smaller than the depth-3 outlier. This test uses 4 sims
+        at depth 0 (values 1, 2, 3, 4) with rho=0.75 (keep top 25% = top 1
+        of 4) and 1 sim at depth 5 (value 100). Expected: only the top
+        depth-0 value (4) and the depth-5 value (100) are selected.
+        weighted_sum = lam**0 * 4 + lam**5 * 100
+        tot_weight   = lam**0 * 1 + lam**5 * 1
+        """
+        from mcts.mcts_joint_osla import compute_osla_value_jax
+
+        lam = 0.8
+        sim_values = jnp.array([1.0, 2.0, 3.0, 4.0, 100.0, 0.0, 0.0, 0.0])
+        sim_depths = jnp.array([0,   0,   0,   0,   5,     0,   0,   0], dtype=jnp.int32)
+        n_visits = jnp.array(5)  # first 5 entries are real, rest is padding
+
+        result = compute_osla_value_jax(
+            sim_values, sim_depths, n_visits, rho=0.75, lam=lam, max_depth=8
+        )
+        expected_weighted_sum = (lam ** 0) * 4.0 + (lam ** 5) * 100.0
+        expected_tot_weight = (lam ** 0) * 1.0 + (lam ** 5) * 1.0
+        expected = expected_weighted_sum / expected_tot_weight
+        assert jnp.allclose(result, expected, atol=1e-4), (
+            f"expected {expected:.4f}, got {float(result):.4f}"
+        )
+
+    def test_matches_old_pooled_behavior_when_all_sims_same_depth(self):
+        """When every sim is at the same depth, per-depth-bucket ranking and
+        pooled ranking are equivalent (there's only one bucket) — sanity
+        check that the rewrite doesn't change single-depth behavior."""
+        from mcts.mcts_joint_osla import compute_osla_value_jax
+
+        sim_values = jnp.array([1.0, 2.0, 3.0, 4.0, 0.0])
+        sim_depths = jnp.zeros(5, dtype=jnp.int32)
+        n_visits = jnp.array(4)
+
+        result = compute_osla_value_jax(
+            sim_values, sim_depths, n_visits, rho=0.75, lam=0.8, max_depth=4
+        )
+        # rho=0.75 -> keep top ceil(4*0.25)=1 -> only value 4.0
+        assert jnp.allclose(result, 4.0, atol=1e-4)
 
 
 # ─── _sample_k_actions tests ──────────────────────────────────────────────────
@@ -736,26 +800,36 @@ class TestComputeOslaValueJax:
         depths = np.array([1, 2, 3, 1, 2, 4, 1, 2, 3, 4], dtype=np.int32)
         values = rng.uniform(0, 2, K).astype(np.float32)
         py_result = float(compute_osla_value(
-            jnp.array(depths), jnp.array(values), rho=0.25, lam=0.8
+            jnp.array(depths), jnp.array(values), rho=0.25, lam=0.8, max_depth=8
         ))
         jax_result = float(compute_osla_value_jax(
-            jnp.array(values), jnp.array(depths), jnp.array(K, jnp.int32), 0.25, 0.8
+            jnp.array(values), jnp.array(depths), jnp.array(K, jnp.int32), 0.25, 0.8, max_depth=8
         ))
         assert abs(py_result - jax_result) < 1e-4, f"py={py_result} jax={jax_result}"
 
     def test_partial_fill(self):
-        """compute_osla_value_jax with n_visits < max_sims ignores padding zeros."""
+        """compute_osla_value_jax with n_visits < max_sims ignores padding zeros.
+
+        NOTE: prior to Task 4, this test's expectation was computed by pooling
+        all 3 valid sims together and taking a single global top-2 (rho=0.25 ->
+        floor(0.75*3)=2), which happened to select both depth-1 sims and drop
+        the depth-2 sim. Under the corrected per-depth-bucket ranking (matching
+        MAZero's SubTreeValueSet), each depth bucket is filtered independently:
+        depth=1 has 2 sims (size_lim=max(1,ceil(2*0.75))=2 -> both kept),
+        depth=2 has 1 sim (size_lim=max(1,ceil(1*0.75))=1 -> kept). So all 3
+        valid sims are now included, each in its own depth bucket.
+        """
         from mcts.mcts_joint_osla import compute_osla_value_jax
         values = jnp.array([1.0, 0.5, 0.8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         depths = jnp.array([1, 2, 1, 0, 0, 0, 0, 0, 0, 0], dtype=jnp.int32)
         n_visits = jnp.array(3, jnp.int32)
-        result = float(compute_osla_value_jax(values, depths, n_visits, 0.25, 0.8))
-        # rho=0.25 → keep top 75% = floor(0.75*3)=2 sims
-        # sorted descending by value: 1.0(d=1), 0.8(d=1), 0.5(d=2)
-        # top 2: values=[1.0,0.8], depths=[1,1]
-        w = 0.8 ** jnp.array([1, 1], dtype=jnp.float32)
-        top_vals = jnp.array([1.0, 0.8])
-        expected = float((top_vals * w).sum() / w.sum())
+        result = float(compute_osla_value_jax(values, depths, n_visits, 0.25, 0.8, max_depth=4))
+        # depth=1 bucket: values [1.0, 0.8], both kept, weight = 0.8**1 each
+        # depth=2 bucket: value [0.5], kept, weight = 0.8**2
+        w1, w2 = 0.8 ** 1, 0.8 ** 2
+        weighted_sum = w1 * (1.0 + 0.8) + w2 * 0.5
+        tot_weight = w1 * 2 + w2 * 1
+        expected = weighted_sum / tot_weight
         assert abs(result - expected) < 1e-4, f"expected {expected}, got {result}"
 
 

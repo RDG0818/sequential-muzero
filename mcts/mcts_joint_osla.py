@@ -13,65 +13,60 @@ from config import ExperimentConfig
 from mcts.base import MCTSPlanner, MCTSPlanOutput
 
 
-def compute_osla_value(
-    sim_depths: chex.Array,    # [K] int32 — simulation leaf depths
-    sim_values: chex.Array,    # [K] float32 — backup values from root
-    rho: float = 0.75,         # keep top (1-rho) fraction; rho=0.75 → top 25%
-    lam: float = 0.8,          # depth decay weight
-) -> chex.Array:
-    """
-    OS(λ) value estimate: weighted mean of the top (1-rho) quantile of simulations,
-    each weighted by lambda^depth.
-
-    rho=0.75 keeps the top 25% of simulations by backup value — amplifying rare
-    high-value paths (e.g. wins) that mean backup would dilute.
-    """
-    K = sim_values.shape[0]
-    # Keep the top (1-rho) fraction of simulations; clamp to [1, K].
-    # rho=0.75 → keep top 25%; rho=1.0 → keep top 0% → clamped to all K.
-    k_top = K if rho == 1.0 else max(1, int((1.0 - rho) * K))
-
-    # Sort simulations by backup value descending; take top k_top indices.
-    sorted_idx = jnp.argsort(sim_values)[::-1]  # descending
-    top_idx = sorted_idx[:k_top]                 # [k_top]
-
-    top_values = sim_values[top_idx]   # [k_top]
-    top_depths = sim_depths[top_idx]   # [k_top]
-    weights = lam ** top_depths.astype(jnp.float32)  # [k_top]
-
-    return (top_values * weights).sum() / (weights.sum() + 1e-8)
-
-
 def compute_osla_value_jax(
     sim_values: chex.Array,   # [max_sims] float32 — padded with 0 after n_visits
     sim_depths: chex.Array,   # [max_sims] int32 — node-to-leaf depth per sim
     n_visits: chex.Array,     # scalar int32 — number of valid entries
     rho: float,
     lam: float,
+    max_depth: int,           # static — number of depth buckets to scan (0..max_depth-1)
 ) -> chex.Array:
-    """JAX-native OS(λ) for use inside jax.lax loops and jax.vmap.
-
-    Fixed-size arrays with validity mask — works inside JAX-traced functions.
+    """JAX-native OS(λ), matching MAZero's `SubTreeValueSet`: the top
+    (1-rho) quantile is selected SEPARATELY within each depth bucket, then
+    buckets are combined with lambda^depth weighting. Pooling all depths
+    together before ranking (the previous behavior) lets one depth's
+    naturally larger/smaller value scale dominate which sims count as "top",
+    instead of comparing sims fairly within their own depth bucket.
     """
     max_sims = sim_values.shape[0]
-    # rho is a Python float (static), so we can branch on it
-    if rho >= 1.0:
-        k_top = n_visits  # keep all valid entries
-    else:
-        k_top = jnp.maximum(
-            1,
-            jnp.floor((1.0 - rho) * n_visits.astype(jnp.float32)).astype(jnp.int32),
-        )
     valid_mask = jnp.arange(max_sims) < n_visits
-    masked_vals = jnp.where(valid_mask, sim_values, -jnp.inf)
-    order = jnp.argsort(masked_vals)[::-1]  # descending
-    sorted_vals = sim_values[order]
-    sorted_depths = sim_depths[order]
-    sorted_valid = valid_mask[order]
-    rank = jnp.arange(max_sims)
-    include = (rank < k_top) & sorted_valid
-    weights = jnp.where(include, lam ** sorted_depths.astype(jnp.float32), 0.0)
-    return (sorted_vals * weights).sum() / (weights.sum() + 1e-8)
+
+    def bucket_contribution(d):
+        depth_mask = valid_mask & (sim_depths == d)
+        count_d = depth_mask.sum()
+        size_lim = jnp.maximum(
+            1, jnp.ceil(count_d.astype(jnp.float32) * (1.0 - rho)).astype(jnp.int32)
+        )
+        masked_vals = jnp.where(depth_mask, sim_values, -jnp.inf)
+        order = jnp.argsort(masked_vals)[::-1]
+        ranked_mask = depth_mask[order]
+        rank = jnp.arange(max_sims)
+        include = (rank < size_lim) & ranked_mask
+        sorted_vals = sim_values[order]
+        weight = lam ** jnp.float32(d)
+        has_any = count_d > 0
+        bucket_sum = jnp.where(has_any, jnp.where(include, sorted_vals, 0.0).sum() * weight, 0.0)
+        bucket_count = jnp.where(has_any, include.sum().astype(jnp.float32) * weight, 0.0)
+        return bucket_sum, bucket_count
+
+    bucket_sums, bucket_counts = jax.vmap(bucket_contribution)(jnp.arange(max_depth))
+    return bucket_sums.sum() / (bucket_counts.sum() + 1e-8)
+
+
+def compute_osla_value(
+    sim_depths: chex.Array,    # [K] int32 — simulation leaf depths
+    sim_values: chex.Array,    # [K] float32 — backup values from root
+    rho: float = 0.25,
+    lam: float = 0.8,          # depth decay weight
+    max_depth: int = 20,
+) -> chex.Array:
+    """Non-padded convenience wrapper over `compute_osla_value_jax` for
+    callers (e.g. the root value in `_osla_plan_single`) where every entry
+    in `sim_values`/`sim_depths` is valid — no `n_visits` padding needed.
+    """
+    return compute_osla_value_jax(
+        sim_values, sim_depths, jnp.array(sim_values.shape[0]), rho, lam, max_depth
+    )
 
 
 # ─── Tree data structure ──────────────────────────────────────────────────────
@@ -183,7 +178,7 @@ def _run_single_sim(
         )
         # OS(λ) over each child's accumulated simulation history [K, num_sims+1]
         child_osla_v = jax.vmap(
-            lambda v, d, n: compute_osla_value_jax(v, d, n, rho, lam)
+            lambda v, d, n: compute_osla_value_jax(v, d, n, rho, lam, max_depth + 2)
         )(
             tree.node_sim_values[safe_idxs],   # [K, num_sims+1]
             tree.node_sim_depths[safe_idxs],   # [K, num_sims+1]
@@ -482,7 +477,7 @@ def _osla_plan_single(
 
     # ── OS(λ) root value ──────────────────────────────────────────────────────
     osla_root_value = compute_osla_value(
-        final_carry.sim_depths, final_carry.sim_values, rho=rho, lam=lam
+        final_carry.sim_depths, final_carry.sim_values, rho=rho, lam=lam, max_depth=max_depth + 2
     )
 
     # ── Policy target from root child visit counts ────────────────────────────
@@ -498,7 +493,7 @@ def _osla_plan_single(
     # Q_k = reward_into_child + gamma * OS(λ)_value(child)
     # Used in the learner to compute per-action advantages instead of state-level.
     child_osla_v = jax.vmap(
-        lambda v, d, n: compute_osla_value_jax(v, d, n, rho, lam)
+        lambda v, d, n: compute_osla_value_jax(v, d, n, rho, lam, max_depth + 2)
     )(
         final_carry.tree.node_sim_values[safe_root_children],  # [K, num_sims+1]
         final_carry.tree.node_sim_depths[safe_root_children],  # [K, num_sims+1]
