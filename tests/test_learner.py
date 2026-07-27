@@ -112,3 +112,44 @@ def test_multi_step_awpo_weights_differ_across_steps():
     adv_norm = (adv_raw - adv_raw.mean()) / (adv_raw.std() + 1e-8)
     w = jnp.exp(jnp.clip(adv_norm / awpo_alpha, -5.0, 5.0))
     assert float(w[0, 0]) > float(w[0, 1]), "Best action should get highest AWPO weight"
+
+
+def test_awpo_weight_stops_gradient_into_baseline():
+    """AWPO weight must not backprop into the value baseline. If it did, the
+    value head could shrink or grow its own prediction purely to inflate the
+    policy-loss weighting it produces, leaking policy-loss gradient into the
+    value head instead of acting as a fixed advantage-weighted multiplier."""
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    from actors.learner_actor import _awpo_weight
+
+    q = jnp.array([1.0, 0.0])  # (B,) fixed targets, independent of the param under test
+
+    def weight_sum(v_scale):
+        v_baseline = jnp.array([0.5, 0.5]) * v_scale  # depends on v_scale
+        return _awpo_weight(q, v_baseline, alpha=1.0).sum()
+
+    grad = jax.grad(weight_sum)(1.0)
+    assert grad == 0.0, f"gradient into value baseline should be zero, got {grad}"
+
+
+def test_awpo_weight_is_scale_invariant():
+    """Std-normalization must make the weight distribution insensitive to the
+    absolute scale of Q/V. This is the exact bug jaxzero's postmortem found
+    and fixed (missing std term made near-uniform Q collapse to near-uniform
+    weights regardless of relative structure) — this test confirms
+    sequential-muzero's `_awpo_weight` already normalizes correctly."""
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    from actors.learner_actor import _awpo_weight
+
+    v_baseline = jnp.zeros(1)
+    small_q = jnp.array([[0.1, 0.2, 0.1, 0.2]])   # std ~ 0.05
+    large_q = jnp.array([[1.0, 2.0, 1.0, 2.0]])   # std ~ 0.5, same relative shape
+
+    w_small = _awpo_weight(small_q, v_baseline, alpha=3.0)
+    w_large = _awpo_weight(large_q, v_baseline, alpha=3.0)
+
+    assert jnp.allclose(w_small, w_large, atol=1e-4), (
+        f"std-normalized weights should be scale-invariant: {w_small} vs {w_large}"
+    )

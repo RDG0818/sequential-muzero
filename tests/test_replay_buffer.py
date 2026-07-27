@@ -376,3 +376,51 @@ def test_process_episode_all_child_q_none_without_q():
     for it in items:
         assert it.all_child_q is None
         assert it.all_child_actions is None
+
+
+def test_process_episode_never_indexes_past_episode_end():
+    """process_episode's sliding window must never read past the real episode
+    end and silently reuse the terminal step's data for phantom future steps
+    — the bug jaxzero's postmortem found in its own `make_target`
+    (`docs/superpowers/plans/2026-05-05-fix-loss-plateau.md` in ../jaxzero/).
+    Confirms this repo's process_episode avoids the bug class by
+    construction: it only emits windows fully inside the episode, and
+    returns none at all for episodes too short to fit one.
+    """
+    from utils.replay_buffer import Transition, Episode, process_episode
+    import numpy as np
+
+    N, obs_size, A = 2, 4, 3
+    unroll_steps, n_step, discount = 5, 3, 0.99
+
+    def make_transition(step: int) -> Transition:
+        return Transition(
+            observation=np.full((N, obs_size), step, dtype=np.float32),
+            action=np.zeros(N, dtype=np.int32),
+            reward=1.0,
+            done=False,
+            policy_target=np.ones((N, A), dtype=np.float32) / A,
+            value_target=0.5,
+            agent_order=np.arange(N),
+        )
+
+    # Episode shorter than unroll_steps: must produce zero items, never a
+    # padded/truncated one.
+    short_episode = Episode()
+    for t in range(3):
+        short_episode.add_step(make_transition(t))
+    assert process_episode(short_episode, unroll_steps, n_step, discount, N) == []
+
+    # Episode longer than unroll_steps: every returned item's window must be
+    # fully inside [0, ep_len).
+    ep_len = 9
+    long_episode = Episode()
+    for t in range(ep_len):
+        long_episode.add_step(make_transition(t))
+
+    items = process_episode(long_episode, unroll_steps, n_step, discount, N)
+    assert len(items) == ep_len - unroll_steps
+    for i in range(len(items)):
+        assert i + unroll_steps < ep_len, (
+            f"item {i}'s window end {i + unroll_steps} reaches/exceeds ep_len {ep_len}"
+        )
