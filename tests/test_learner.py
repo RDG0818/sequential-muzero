@@ -131,3 +131,25 @@ def test_awpo_weight_stops_gradient_into_baseline():
 
     grad = jax.grad(weight_sum)(1.0)
     assert grad == 0.0, f"gradient into value baseline should be zero, got {grad}"
+
+
+def test_awpo_weight_is_scale_invariant():
+    """Std-normalization must make the weight distribution insensitive to the
+    absolute scale of Q/V. This is the exact bug jaxzero's postmortem found
+    and fixed (missing std term made near-uniform Q collapse to near-uniform
+    weights regardless of relative structure) — this test confirms
+    sequential-muzero's `_awpo_weight` already normalizes correctly."""
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    from actors.learner_actor import _awpo_weight
+
+    v_baseline = jnp.zeros(1)
+    small_q = jnp.array([[0.1, 0.2, 0.1, 0.2]])   # std ~ 0.05
+    large_q = jnp.array([[1.0, 2.0, 1.0, 2.0]])   # std ~ 0.5, same relative shape
+
+    w_small = _awpo_weight(small_q, v_baseline, alpha=3.0)
+    w_large = _awpo_weight(large_q, v_baseline, alpha=3.0)
+
+    assert jnp.allclose(w_small, w_large, atol=1e-4), (
+        f"std-normalized weights should be scale-invariant: {w_small} vs {w_large}"
+    )
