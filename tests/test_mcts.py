@@ -527,11 +527,14 @@ class TestOSLAHelpers:
         """Unvisited children (visit_count=0) should have higher UCB than visited ones."""
         from mcts.mcts_joint_osla import compute_ucb_scores
         child_visits = jnp.array([5.0, 0.0, 3.0, 0.0])
-        child_q = jnp.array([0.5, 0.0, 0.3, 0.0])
+        child_q_diff = jnp.array([0.5, 0.0, 0.3, 0.0])
         prior_probs = jnp.array([0.25, 0.25, 0.25, 0.25])
         parent_visits = jnp.array(8.0)
-        ucb = compute_ucb_scores(child_q, child_visits, prior_probs, parent_visits, c_puct=1.25)
-        # Unvisited children (indices 1, 3) should have higher UCB than visited ones
+        ucb = compute_ucb_scores(
+            child_q_diff, child_visits, prior_probs, parent_visits,
+            qmin=jnp.array(0.0), qmax=jnp.array(1.0),
+            pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01,
+        )
         assert ucb[1] > ucb[0]
         assert ucb[3] > ucb[2]
 
@@ -539,8 +542,9 @@ class TestOSLAHelpers:
         from mcts.mcts_joint_osla import compute_ucb_scores
         K = 10
         ucb = compute_ucb_scores(
-            jnp.zeros(K), jnp.zeros(K), jnp.ones(K) / K,
-            jnp.array(1.0), c_puct=1.25
+            jnp.zeros(K), jnp.zeros(K), jnp.ones(K) / K, jnp.array(1.0),
+            qmin=jnp.array(0.0), qmax=jnp.array(1.0),
+            pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01,
         )
         assert ucb.shape == (K,)
 
@@ -553,6 +557,7 @@ class TestOSLAHelpers:
             visit_counts=jnp.zeros(5, jnp.int32),
             value_sum=jnp.zeros(5),
             reward=jnp.zeros(5),
+            pred_value=jnp.zeros(5),
             embedding=jnp.zeros((5, 3, 32)),
             depth=jnp.zeros(5, jnp.int32),
             parent=jnp.full(5, -1, jnp.int32),
@@ -563,9 +568,77 @@ class TestOSLAHelpers:
             node_sim_depths=jnp.zeros((5, max_sims_slots), jnp.int32),
         )
         leaves, treedef = jax.tree_util.tree_flatten(tree)
-        assert len(leaves) == 11  # 9 original + 2 new fields
+        assert len(leaves) == 12  # 9 original + 2 node_sim fields + 1 pred_value
         tree2 = treedef.unflatten(leaves)
         assert jnp.array_equal(tree2.visit_counts, tree.visit_counts)
+
+
+class TestUCBLogVisitScaling:
+
+    def test_pb_c_grows_with_parent_visits(self):
+        """The prior-exploration term must grow with log(parent_visits), not
+        stay fixed — matches MuZero/MAZero's pb_c formula, not a constant
+        c_puct."""
+        from mcts.mcts_joint_osla import compute_ucb_scores
+
+        child_visits = jnp.zeros(3)
+        prior_probs = jnp.ones(3) / 3
+        qmin = jnp.array(0.0)
+        qmax = jnp.array(0.0)  # no stats yet (qmax <= qmin)
+
+        ucb_low_n = compute_ucb_scores(
+            jnp.zeros(3), child_visits, prior_probs, parent_visits=jnp.array(1.0),
+            qmin=qmin, qmax=qmax, pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01,
+        )
+        ucb_high_n = compute_ucb_scores(
+            jnp.zeros(3), child_visits, prior_probs, parent_visits=jnp.array(1000.0),
+            qmin=qmin, qmax=qmax, pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01,
+        )
+        # All children still unvisited in both cases, so the difference is
+        # purely the pb_c(N_parent) prior-exploration scaling.
+        assert jnp.all(ucb_high_n > ucb_low_n), (
+            "prior-exploration term should grow with parent visit count"
+        )
+
+    def test_value_term_normalized_into_unit_range(self):
+        """With running qmin/qmax stats present, the Q-baseline-diff term
+        must be clipped into [0, 1] regardless of its raw scale."""
+        from mcts.mcts_joint_osla import compute_ucb_scores
+
+        # Raw Q-baseline diffs of huge magnitude (as if value support were
+        # [-5, 5] and Q-values routinely differ by several units) must not
+        # swamp the prior term once normalized.
+        child_q_diff = jnp.array([-5.0, 0.0, 5.0])
+        child_visits = jnp.array([1.0, 1.0, 1.0])
+        prior_probs = jnp.ones(3) / 3
+        ucb = compute_ucb_scores(
+            child_q_diff, child_visits, prior_probs, parent_visits=jnp.array(3.0),
+            qmin=jnp.array(-5.0), qmax=jnp.array(5.0),
+            pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01,
+        )
+        # value_score for each child should be (diff - qmin) / (qmax - qmin),
+        # i.e. 0.0, 0.5, 1.0 respectively, plus an identical prior term.
+        value_scores = ucb - ucb[1] + 0.5  # back out value_score using the middle child as anchor
+        assert jnp.allclose(value_scores, jnp.array([0.0, 0.5, 1.0]), atol=1e-3)
+
+    def test_unvisited_children_get_zero_value_score(self):
+        """Matches MAZero: `if (child->visit_count == 0) value_score = 0`."""
+        from mcts.mcts_joint_osla import compute_ucb_scores
+
+        child_q_diff = jnp.array([100.0, 100.0])  # would be huge if not masked
+        child_visits = jnp.array([0.0, 0.0])
+        prior_probs = jnp.array([0.5, 0.5])
+        ucb = compute_ucb_scores(
+            child_q_diff, child_visits, prior_probs, parent_visits=jnp.array(1.0),
+            qmin=jnp.array(-1.0), qmax=jnp.array(1.0),
+            pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01,
+        )
+        pb_c = jnp.log((1.0 + 19652.0 + 1.0) / 19652.0) + 1.25
+        pb_c = pb_c * jnp.sqrt(1.0) / (1.0 + 0.0)
+        expected_prior_score = pb_c * 0.5
+        assert jnp.allclose(ucb, expected_prior_score, atol=1e-3), (
+            "unvisited children should score purely on the prior term (value_score=0)"
+        )
 
 
 class TestOSLAPerDepthQuantile:
@@ -690,6 +763,7 @@ class TestRunSingleSimBackup:
             visit_counts=jnp.array([1] + [0] * (max_nodes - 1), jnp.int32),
             value_sum=jnp.zeros(max_nodes),
             reward=jnp.zeros(max_nodes),
+            pred_value=jnp.zeros(max_nodes),
             embedding=jnp.zeros((max_nodes, N, D)),
             depth=jnp.zeros(max_nodes, jnp.int32),
             parent=jnp.full(max_nodes, -1, jnp.int32),
@@ -705,6 +779,8 @@ class TestRunSingleSimBackup:
             rng=jax.random.PRNGKey(1),
             sim_depths=jnp.zeros(1, jnp.int32),
             sim_values=jnp.zeros(1, jnp.float32),
+            qmin=jnp.array(1e9, jnp.float32),
+            qmax=jnp.array(-1e9, jnp.float32),
         )
 
         fake_rf = self._make_fake_recurrent_fn(r, v, A_N, N, D)

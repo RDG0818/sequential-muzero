@@ -39,6 +39,9 @@ class MCTSConfig:
     use_root_communication: bool
     mcts_rho: float = 0.75    # OS(λ): top quantile fraction to keep (1-rho is discarded)
     mcts_lambda: float = 0.8  # OS(λ): depth discount weight (lambda^depth)
+    pb_c_base: float = 19652.0   # UCB: log-visit exploration scaling (MuZero/MAZero standard)
+    pb_c_init: float = 1.25     # UCB: base exploration constant (MuZero/MAZero standard)
+    value_delta_lb: float = 0.01  # UCB: min-max Q-normalization floor, prevents divide-by-~0
 
 
 @dataclass(frozen=True)

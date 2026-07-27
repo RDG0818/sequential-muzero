@@ -81,6 +81,7 @@ class OSLATree:
     visit_counts:     chex.Array  # [max_nodes] int32
     value_sum:        chex.Array  # [max_nodes] float32
     reward:           chex.Array  # [max_nodes] float32 — reward to enter this node
+    pred_value:       chex.Array  # [max_nodes] float32 — raw network value prediction at expansion
     embedding:        chex.Array  # [max_nodes, N, D] float32
     depth:            chex.Array  # [max_nodes] int32
     parent:           chex.Array  # [max_nodes] int32 (-1 = root)
@@ -100,6 +101,8 @@ class SimCarry:
     rng:        chex.Array   # PRNGKey
     sim_depths: chex.Array   # [num_simulations] int32
     sim_values: chex.Array   # [num_simulations] float32
+    qmin:       chex.Array   # [] float32 — running min Q-baseline-diff seen in this tree
+    qmax:       chex.Array   # [] float32 — running max Q-baseline-diff seen in this tree
 
 
 @chex.dataclass
@@ -119,15 +122,34 @@ class SelectCarry:
 # ─── UCB helper ───────────────────────────────────────────────────────────────
 
 def compute_ucb_scores(
-    child_q:       chex.Array,  # [K] float32 — mean Q-value per child
+    child_q_baseline_diff: chex.Array,  # [K] float32 — get_qsa(child) - parent.pred_value
     child_visits:  chex.Array,  # [K] float32 — visit counts (0 = unvisited)
     prior_probs:   chex.Array,  # [K] float32 — prior probabilities
-    parent_visits: chex.Array,  # [] float32 — total visits at parent
-    c_puct: float = 1.25,
+    parent_visits: chex.Array,  # [] float32 — total visits at parent BEFORE this simulation
+    qmin: chex.Array,           # [] float32 — running min Q-baseline-diff seen in this tree
+    qmax: chex.Array,           # [] float32 — running max Q-baseline-diff seen in this tree
+    pb_c_base: float,
+    pb_c_init: float,
+    value_delta_lb: float,
 ) -> chex.Array:
-    """PUCT formula: Q(a) + c_puct * P(a) * sqrt(N_parent + 1) / (1 + N(a))."""
-    exploration = c_puct * prior_probs * jnp.sqrt(parent_visits + 1.0) / (1.0 + child_visits)
-    return child_q + exploration
+    """PUCT with MuZero/MAZero-style log-visit exploration scaling and
+    min-max Q normalization (matches `CTree::ucb_score` in MAZero's
+    cnode.cpp): the prior-exploration term grows with log(parent_visits)
+    instead of a fixed constant, and the Q-value term is normalized into
+    [0, 1] by the running min/max seen anywhere in the tree so far, so it's
+    comparable in scale to the prior term regardless of the value support's
+    absolute range.
+    """
+    pb_c = jnp.log((parent_visits + pb_c_base + 1.0) / pb_c_base) + pb_c_init
+    pb_c = pb_c * jnp.sqrt(parent_visits) / (1.0 + child_visits)
+    prior_score = pb_c * prior_probs
+
+    has_stats = qmax > qmin
+    delta = jnp.maximum(value_delta_lb, qmax - qmin)
+    normalized = jnp.where(has_stats, (child_q_baseline_diff - qmin) / delta, child_q_baseline_diff)
+    value_score = jnp.where(child_visits > 0, jnp.clip(normalized, 0.0, 1.0), 0.0)
+
+    return prior_score + value_score
 
 
 # ─── Action sampling helper ───────────────────────────────────────────────────
@@ -156,9 +178,11 @@ def _run_single_sim(
     A_N: int,                     # static
     max_depth: int,               # static
     gamma: float,
-    c_puct: float = 1.25,
     rho: float = 0.75,
     lam: float = 0.8,
+    pb_c_base: float = 19652.0,
+    pb_c_init: float = 1.25,
+    value_delta_lb: float = 0.01,
 ) -> SimCarry:
     """Run one MCTS simulation: selection → expansion → backup → record (depth, value)."""
     tree = carry.tree
@@ -185,15 +209,21 @@ def _run_single_sim(
             jnp.where(child_node_idxs >= 0, tree.visit_counts[safe_idxs],
                       jnp.zeros(K, jnp.int32)),
         )  # [K]
-        child_q = jnp.where(
+        child_qsa = jnp.where(
             child_node_idxs >= 0,
             tree.reward[safe_idxs] + gamma * child_osla_v,
             0.0,
-        )
+        )  # [K]
+        parent_pred_value = tree.pred_value[node_idx]
+        child_q_baseline_diff = child_qsa - parent_pred_value
         prior_probs = tree.child_prior_prob[node_idx]
-        parent_visits = tree.visit_counts[node_idx].astype(jnp.float32)
-        ucb = compute_ucb_scores(child_q, child_visits, prior_probs, parent_visits, c_puct)
-        return jnp.argmax(ucb).astype(jnp.int32)
+        parent_visits = jnp.maximum(tree.visit_counts[node_idx].astype(jnp.float32) - 1.0, 0.0)
+        ucb = compute_ucb_scores(
+            child_q_baseline_diff, child_visits, prior_probs, parent_visits,
+            carry.qmin, carry.qmax, pb_c_base, pb_c_init, value_delta_lb,
+        )
+        ucb_choice = jnp.argmax(ucb).astype(jnp.int32)
+        return ucb_choice
 
     # ── 2. Selection via while_loop ───────────────────────────────────────────
     init_bk = _best_ucb(jnp.array(0, jnp.int32))
@@ -265,6 +295,7 @@ def _run_single_sim(
     tree = tree.replace(
         embedding=tree.embedding.at[new_node_idx].set(new_embedding),
         reward=tree.reward.at[new_node_idx].set(leaf_reward),
+        pred_value=tree.pred_value.at[new_node_idx].set(leaf_value),
         depth=tree.depth.at[new_node_idx].set(leaf_depth),
         parent=tree.parent.at[new_node_idx].set(parent_node),
         child_actions=tree.child_actions.at[new_node_idx].set(new_child_actions),
@@ -289,7 +320,7 @@ def _run_single_sim(
     # At step k=1, update parent (depth=leaf_depth-1) with V = reward[leaf] + gamma * leaf_value.
     # etc.
     def backup_step(k, bcarry):
-        btree, V = bcarry
+        btree, V, qmin, qmax = bcarry
         i = leaf_depth - k   # depth index: leaf_depth, leaf_depth-1, ..., 0
         valid = k <= leaf_depth
         node_i = jnp.where(valid, path_nodes[i], 0)  # safe index (0 when invalid)
@@ -308,13 +339,28 @@ def _run_single_sim(
             visit_counts=new_vc, value_sum=new_vs,
             node_sim_values=new_nsv, node_sim_depths=new_nsd,
         )
-        # V for next (shallower) node: V_parent = reward_into_current + gamma * V_current
+
+        # Running min/max Q-baseline-diff, for non-root nodes only (matches
+        # MAZero: `if (i != 0) minmax_stat.insert(...)`). Uses this
+        # simulation's own backed-up value V as the node's Q signal rather
+        # than recomputing the full OS(λ) estimate here, which would need
+        # an extra O(num_simulations) argsort per backup step — the running
+        # bound only needs to stay roughly representative, not exact.
+        is_root = i == 0
+        parent_node_i = jnp.where(valid & ~is_root, path_nodes[jnp.maximum(i - 1, 0)], 0)
+        qsa_diff = path_rewards[jnp.maximum(i, 0)] + gamma * V - btree.pred_value[parent_node_i]
+        update_stat = valid & ~is_root
+        new_qmin = jnp.where(update_stat, jnp.minimum(qmin, qsa_diff), qmin)
+        new_qmax = jnp.where(update_stat, jnp.maximum(qmax, qsa_diff), qmax)
+
         r_i = path_rewards[jnp.maximum(i, 0)]
         V_new = r_i + gamma * V
         V = jnp.where(valid & (k < leaf_depth), V_new, V)
-        return btree, V
+        return btree, V, new_qmin, new_qmax
 
-    tree, _ = jax.lax.fori_loop(0, max_depth + 1, backup_step, (tree, leaf_value))
+    tree, _, final_qmin, final_qmax = jax.lax.fori_loop(
+        0, max_depth + 1, backup_step, (tree, leaf_value, carry.qmin, carry.qmax)
+    )
 
     # ── 5. Record OS(λ) data ───────────────────────────────────────────────────
     # Root backup value: cumulative discounted rewards from root to leaf, plus gamma^depth * V_leaf
@@ -336,6 +382,8 @@ def _run_single_sim(
         rng=rng,
         sim_depths=sim_depths,
         sim_values=sim_values,
+        qmin=final_qmin,
+        qmax=final_qmax,
     )
 
 
@@ -383,7 +431,9 @@ def _osla_plan_single(
     gamma: float,
     rho: float,
     lam: float,
-    c_puct: float,
+    pb_c_base: float,
+    pb_c_init: float,
+    value_delta_lb: float,
     dirichlet_alpha: float,
     dirichlet_fraction: float,
     joint_action_shape: tuple,        # static
@@ -401,6 +451,7 @@ def _osla_plan_single(
         {"params": params}, obs_batched, rngs={"dropout": init_key}
     )
     root_embedding = init_out.hidden_state[0]     # [N, D]
+    root_pred_value = utils.support_to_scalar(init_out.value_logits, value_support)[0]  # scalar
     root_joint_logits = _logits_to_joint_logits(init_out.policy_logits[0], N)
 
     # Dirichlet noise on root prior
@@ -419,6 +470,7 @@ def _osla_plan_single(
         visit_counts=jnp.zeros(max_nodes, jnp.int32).at[0].set(1),  # root starts with 1 visit
         value_sum=jnp.zeros(max_nodes, jnp.float32),
         reward=jnp.zeros(max_nodes, jnp.float32),
+        pred_value=jnp.zeros(max_nodes, jnp.float32).at[0].set(root_pred_value),
         embedding=jnp.zeros((max_nodes, N, D), jnp.float32).at[0].set(root_embedding),
         depth=jnp.zeros(max_nodes, jnp.int32),
         parent=jnp.full(max_nodes, -1, jnp.int32),
@@ -435,6 +487,8 @@ def _osla_plan_single(
         rng=rng,
         sim_depths=jnp.zeros(num_simulations, jnp.int32),
         sim_values=jnp.zeros(num_simulations, jnp.float32),
+        qmin=jnp.array(1e9, jnp.float32),
+        qmax=jnp.array(-1e9, jnp.float32),
     )
 
     # ── Recurrent fn (batched interface required by _run_single_sim) ──────────
@@ -470,7 +524,8 @@ def _osla_plan_single(
     def sim_step(sim_idx, carry: SimCarry) -> SimCarry:
         return _run_single_sim(
             carry, sim_idx, params, recurrent_fn_batched,
-            K, A_N, max_depth, gamma, c_puct, rho, lam,
+            K, A_N, max_depth, gamma, rho, lam,
+            pb_c_base, pb_c_init, value_delta_lb,
         )
 
     final_carry = jax.lax.fori_loop(0, num_simulations, sim_step, init_carry)
@@ -558,6 +613,9 @@ class MCTSJointOSLAPlanner(MCTSPlanner):
         self.A_N = self.action_space_size ** self.num_agents
         self.mcts_rho = config.mcts.mcts_rho
         self.mcts_lambda = config.mcts.mcts_lambda
+        self.pb_c_base = config.mcts.pb_c_base
+        self.pb_c_init = config.mcts.pb_c_init
+        self.value_delta_lb = config.mcts.value_delta_lb
         # Override: don't JIT recurrent_fn standalone (it's called inside _osla_plan_single)
         self._recurrent_fn_jit = None
 
@@ -581,7 +639,9 @@ class MCTSJointOSLAPlanner(MCTSPlanner):
             gamma=self.discount_gamma,
             rho=self.mcts_rho,
             lam=self.mcts_lambda,
-            c_puct=1.25,
+            pb_c_base=self.pb_c_base,
+            pb_c_init=self.pb_c_init,
+            value_delta_lb=self.value_delta_lb,
             dirichlet_alpha=self.dirichlet_alpha,
             dirichlet_fraction=self.dirichlet_fraction,
             joint_action_shape=self.joint_action_shape,
