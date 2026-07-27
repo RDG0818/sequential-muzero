@@ -223,7 +223,11 @@ def _run_single_sim(
             carry.qmin, carry.qmax, pb_c_base, pb_c_init, value_delta_lb,
         )
         ucb_choice = jnp.argmax(ucb).astype(jnp.int32)
-        return ucb_choice
+        is_root = node_idx == 0
+        root_visits = tree.visit_counts[0]
+        round_robin_active = is_root & (root_visits <= K)
+        round_robin_choice = (root_visits - 1).astype(jnp.int32)
+        return jnp.where(round_robin_active, round_robin_choice, ucb_choice)
 
     # ── 2. Selection via while_loop ───────────────────────────────────────────
     init_bk = _best_ucb(jnp.array(0, jnp.int32))

@@ -926,3 +926,75 @@ class TestPerNodeOsla:
         assert out.policy_targets.shape == (1, N, A)
         assert out.root_value.shape == (1,)
         assert jnp.isfinite(out.root_value).all()
+
+
+class TestRootRoundRobin:
+
+    def test_first_k_simulations_visit_each_root_child_once(self):
+        """MAZero: `if (node->is_root && node->visit_count <= node->num_children)
+        child_index = node->visit_count - 1;` — the first K simulations must
+        round-robin through the K sampled root actions before UCB selection
+        kicks in, regardless of prior/value differences between them."""
+        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry, _sample_k_actions
+        import mctx
+
+        K, A_N, N, D, max_depth, gamma = 4, 25, 2, 8, 3, 0.99
+
+        # Deliberately skewed priors so UCB alone (without round-robin)
+        # would pick child 0 every time.
+        rng = jax.random.PRNGKey(0)
+        skewed_logits = jnp.array([10.0, 0.0, 0.0, 0.0] + [0.0] * (A_N - 4))
+        child_actions, child_probs = _sample_k_actions(rng, skewed_logits, K, A_N)
+
+        max_nodes = K + 2
+        tree = OSLATree(
+            visit_counts=jnp.array([1] + [0] * (max_nodes - 1), jnp.int32),
+            value_sum=jnp.zeros(max_nodes),
+            reward=jnp.zeros(max_nodes),
+            pred_value=jnp.zeros(max_nodes),
+            embedding=jnp.zeros((max_nodes, N, D)),
+            depth=jnp.zeros(max_nodes, jnp.int32),
+            parent=jnp.full(max_nodes, -1, jnp.int32),
+            child_actions=jnp.zeros((max_nodes, K), jnp.int32).at[0].set(child_actions),
+            child_node_idx=jnp.full((max_nodes, K), -1, jnp.int32),
+            child_prior_prob=jnp.zeros((max_nodes, K)).at[0].set(child_probs),
+            node_sim_values=jnp.zeros((max_nodes, K + 1)),
+            node_sim_depths=jnp.zeros((max_nodes, K + 1), jnp.int32),
+        )
+
+        def fake_recurrent_fn(params, rng, flat_action, embedding):
+            B = flat_action.shape[0]
+            return (
+                mctx.RecurrentFnOutput(
+                    reward=jnp.zeros((B,)),
+                    discount=jnp.ones((B,)),
+                    prior_logits=jnp.zeros((B, A_N)),
+                    value=jnp.zeros((B,)),
+                ),
+                embedding,
+            )
+
+        carry = SimCarry(
+            tree=tree, next_free=jnp.array(1, jnp.int32), rng=jax.random.PRNGKey(1),
+            sim_depths=jnp.zeros(K, jnp.int32), sim_values=jnp.zeros(K, jnp.float32),
+            qmin=jnp.array(1e9), qmax=jnp.array(-1e9),
+        )
+
+        visited_children = []
+        for sim_idx in range(K):
+            carry = _run_single_sim(
+                carry, jnp.array(sim_idx), None, fake_recurrent_fn,
+                K, A_N, max_depth, gamma,
+                pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01, rho=0.25, lam=0.8,
+            )
+            # child_node_idx[0] tracks which of the K children have been
+            # expanded so far; the newly-expanded one this round is the one
+            # that just went from -1 to >= 0.
+            expanded = jnp.where(carry.tree.child_node_idx[0] >= 0)[0]
+            visited_children.append(int(expanded[-1]) if len(expanded) > len(visited_children) else None)
+
+        distinct_children_visited = {c for c in visited_children if c is not None}
+        assert len(distinct_children_visited) == K, (
+            f"expected all {K} root children visited within the first {K} sims, "
+            f"got {visited_children}"
+        )
