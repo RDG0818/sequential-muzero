@@ -38,6 +38,23 @@ def _scale_grad_half_bwd(_, g):
 scale_grad_half.defvjp(_scale_grad_half_fwd, _scale_grad_half_bwd)
 
 
+def _awpo_weight(q: '_jax.Array', v_baseline: '_jax.Array', alpha: float) -> '_jax.Array':
+    """AWAC-style exponential advantage weight, batch-normalized.
+
+    `v_baseline` is stop-gradiented: the AWPO weight must act as a fixed
+    multiplier on the policy loss, not a term the value head can shrink or
+    grow to inflate its own weighting.
+    """
+    v_baseline = _jax.lax.stop_gradient(v_baseline)
+    if v_baseline.ndim < q.ndim:
+        v_baseline = v_baseline[..., None]
+    adv_raw = q - v_baseline
+    adv_mean = adv_raw.mean()
+    adv_std = adv_raw.std()
+    adv_norm = (adv_raw - adv_mean) / (adv_std + 1e-8)
+    return _jax.numpy.exp(_jax.numpy.clip(adv_norm / alpha, -5.0, 5.0))
+
+
 def make_train_step(model, optimizer, value_support, reward_support, config: ExperimentConfig):
     """
     Returns a JIT-compiled training step function.
@@ -108,13 +125,7 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
 
                 # Current network value prediction as AWAC baseline (not stale MCTS value)
                 v_net = support_to_scalar(init_out.value_logits, value_support)  # (B,)
-                action_adv_raw = q_k - v_net[:, None]  # (B, K)
-                # Batch-normalize so exp weights have non-trivial variance regardless
-                # of absolute Q/V scale (matches MAZero advantage normalization)
-                adv_mean = action_adv_raw.mean()
-                adv_std = action_adv_raw.std()
-                action_adv_norm = (action_adv_raw - adv_mean) / (adv_std + 1e-8)
-                awpo_w_k = jnp.exp(jnp.clip(action_adv_norm / awpo_alpha, -5.0, 5.0))  # (B, K)
+                awpo_w_k = _awpo_weight(q_k, v_net, awpo_alpha)  # (B, K)
 
                 # Per-agent log-probs for each sampled joint action:
                 # log_probs[b, n, a] → gather with child_actions[b, k, n]
@@ -142,11 +153,7 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                 # No Q-data available (e.g. non-OSLA planner): state-level fallback
                 v_mcts = batch.value_target[:, 0].mean(axis=-1)  # (B,)
                 v_net = support_to_scalar(init_out.value_logits, value_support)  # (B,)
-                advantage = v_mcts - v_net
-                adv_mean = advantage.mean()
-                adv_std = advantage.std()
-                advantage_norm = (advantage - adv_mean) / (adv_std + 1e-8)
-                awpo_w = jnp.exp(jnp.clip(advantage_norm / awpo_alpha, -5.0, 5.0))
+                awpo_w = _awpo_weight(v_mcts, v_net, awpo_alpha)
                 p0_loss = awpo_w * ce_p0  # (B,)
             else:
                 p0_loss = ce_p0  # (B,)
@@ -199,11 +206,7 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                         out.policy_logits, pi_target
                     ).mean(axis=-1)  # (B,) fallback
                     v_net_step = support_to_scalar(out.value_logits, value_support)  # (B,)
-                    adv_raw  = qd_q - v_net_step[:, None]                            # (B, K)
-                    adv_mean = adv_raw.mean()
-                    adv_std  = adv_raw.std()
-                    adv_norm = (adv_raw - adv_mean) / (adv_std + 1e-8)              # (B, K)
-                    awpo_w   = jnp.exp(jnp.clip(adv_norm / awpo_alpha, -5.0, 5.0)) # (B, K)
+                    awpo_w = _awpo_weight(qd_q, v_net_step, awpo_alpha)  # (B, K)
                     B_ = qd_q.shape[0]
                     K_ = qd_q.shape[1]
                     N_ = out.policy_logits.shape[1]

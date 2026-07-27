@@ -112,3 +112,22 @@ def test_multi_step_awpo_weights_differ_across_steps():
     adv_norm = (adv_raw - adv_raw.mean()) / (adv_raw.std() + 1e-8)
     w = jnp.exp(jnp.clip(adv_norm / awpo_alpha, -5.0, 5.0))
     assert float(w[0, 0]) > float(w[0, 1]), "Best action should get highest AWPO weight"
+
+
+def test_awpo_weight_stops_gradient_into_baseline():
+    """AWPO weight must not backprop into the value baseline. If it did, the
+    value head could shrink or grow its own prediction purely to inflate the
+    policy-loss weighting it produces, leaking policy-loss gradient into the
+    value head instead of acting as a fixed advantage-weighted multiplier."""
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    from actors.learner_actor import _awpo_weight
+
+    q = jnp.array([1.0, 0.0])  # (B,) fixed targets, independent of the param under test
+
+    def weight_sum(v_scale):
+        v_baseline = jnp.array([0.5, 0.5]) * v_scale  # depends on v_scale
+        return _awpo_weight(q, v_baseline, alpha=1.0).sum()
+
+    grad = jax.grad(weight_sum)(1.0)
+    assert grad == 0.0, f"gradient into value baseline should be zero, got {grad}"
