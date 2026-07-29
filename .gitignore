@@ -1,2 +1,4 @@
 wandb
 .worktrees/
+__pycache__/
+*.pyc
