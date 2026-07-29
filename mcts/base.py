@@ -64,8 +64,6 @@ class MCTSPlanner(ABC):
         self.dirichlet_alpha = config.mcts.dirichlet_alpha
         self.dirichlet_fraction = config.mcts.dirichlet_fraction
 
-        # JIT the recurrent function once at construction; it's used as an
-        # inner callback inside mctx and benefits from early compilation.
         self._recurrent_fn_jit = jax.jit(self._recurrent_fn)
 
     def add_dirichlet_noise(
