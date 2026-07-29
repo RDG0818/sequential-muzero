@@ -3,8 +3,6 @@
 from abc import ABC, abstractmethod
 from typing import NamedTuple
 
-import jax
-import jax.numpy as jnp
 import chex
 
 from model import FlaxMAMuZeroNet
@@ -63,25 +61,6 @@ class MCTSPlanner(ABC):
 
         self.dirichlet_alpha = config.mcts.dirichlet_alpha
         self.dirichlet_fraction = config.mcts.dirichlet_fraction
-
-        self._recurrent_fn_jit = jax.jit(self._recurrent_fn)
-
-    def add_dirichlet_noise(
-        self, rng_key: chex.Array, prior_logits: chex.Array
-    ) -> tuple[chex.Array, chex.Array]:
-        """
-        Applies Dirichlet noise to root policy logits for exploration.
-
-        Returns:
-            A new rng key (for the subsequent MCTS search) and the noisy logits.
-        """
-        mcts_key, noise_key = jax.random.split(rng_key)
-        probs = jax.nn.softmax(prior_logits, axis=-1)
-        noise = jax.random.dirichlet(
-            noise_key, alpha=jnp.full_like(probs, self.dirichlet_alpha)
-        )
-        noisy_probs = (1 - self.dirichlet_fraction) * probs + self.dirichlet_fraction * noise
-        return mcts_key, jnp.log(noisy_probs)
 
     @abstractmethod
     def _recurrent_fn(
