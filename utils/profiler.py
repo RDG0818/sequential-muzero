@@ -1,26 +1,7 @@
-"""Lightweight wall-clock profiler for periodic performance logging.
-
-Each actor creates one Profiler instance. Operations are timed with the
-`time()` context manager; `step()` is called once per logical unit of work
-(training step, episode, reanalyze batch). Stats are logged and reset every
-`log_interval` steps.
-
-JAX note: JAX dispatches GPU kernels asynchronously. To measure actual GPU
-compute time (not just dispatch time), call `jax.block_until_ready(result)`
-inside the `time()` block before it exits.
-
-Example::
-
-    profiler = Profiler("LearnerActor", log_interval=100)
-
-    with profiler.time("sample_wait"):
-        batch = ray.get(prefetch_future)
-
-    with profiler.time("train_step"):
-        params, metrics = train_step(...)
-        jax.block_until_ready(params)   # blocks until GPU kernel finishes
-
-    profiler.step()                     # logs every log_interval calls
+"""Wall-clock profiler: time() context manager per named operation, step()
+logs and resets every log_interval calls. JAX note: call
+jax.block_until_ready(result) inside time() to measure actual compute time,
+not just async dispatch time.
 """
 
 import time

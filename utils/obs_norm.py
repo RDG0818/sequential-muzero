@@ -1,23 +1,7 @@
 # utils/obs_norm.py
-"""
-Online EMA normalizer for observations.
-
-Maintains a running mean and variance over the per-feature observation
-statistics using exponential moving averages.  Updated on each training batch
-(over all (B * N, obs_size) observations); read-only during MCTS data
-collection.
-
-The normalizer state is serializable (plain numpy dicts) so it can be synced
-to DataActors and ReanalyzeActors alongside model parameters via get_params().
-
-Usage in LearnerActor._train_step():
-    self.obs_norm.update(batch.observation)       # update running stats
-    batch = replace(batch, observation=self.obs_norm.normalize(batch.observation))
-    # then device_put and train_step as usual
-
-Usage in DataActor.run_episode():
-    obs_to_plan = self.obs_norm.normalize(np.array(observations))
-    plan_output = self.plan_fn(self.params, plan_key, jnp.array(obs_to_plan))
+"""EMA per-feature observation normalizer. State is plain-numpy serializable
+so it syncs to DataActors/ReanalyzeActors alongside model params via
+get_params(); read-only during MCTS data collection, updated during training.
 """
 import numpy as np
 
@@ -44,10 +28,6 @@ class ObsRunningNorm:
         self.mean = np.zeros(obs_size, dtype=np.float32)
         self.var = np.ones(obs_size, dtype=np.float32)
         self._initialized = False
-
-    # ------------------------------------------------------------------
-    # Update / normalize
-    # ------------------------------------------------------------------
 
     def update(self, obs: np.ndarray) -> None:
         """
@@ -82,10 +62,6 @@ class ObsRunningNorm:
         """
         obs = obs.astype(np.float32)
         return (obs - self.mean) / np.sqrt(self.var + self.epsilon)
-
-    # ------------------------------------------------------------------
-    # Serialization (for syncing to DataActors alongside model params)
-    # ------------------------------------------------------------------
 
     def state(self) -> dict:
         """Returns a serializable snapshot of the running statistics."""
