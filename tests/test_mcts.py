@@ -170,7 +170,7 @@ class TestComputeOslaValue:
         rho=0.0, which is the fraction that actually keeps every sim under the
         MAZero-faithful formula.
         """
-        from mcts.mcts_joint_osla import compute_osla_value
+        from mcts.osla_math import compute_osla_value
         depths = jnp.array([1, 1, 1, 1], dtype=jnp.int32)
         values = jnp.array([0.0, 0.0, 0.0, 1.0], dtype=jnp.float32)
         # rho=0.0: keep all 4, mean = 0.25
@@ -179,7 +179,7 @@ class TestComputeOslaValue:
 
     def test_top_rho_amplifies_rare_wins(self):
         """rho=0.75 keeps top 25% (1 out of 4), result = the win value (1.0)."""
-        from mcts.mcts_joint_osla import compute_osla_value
+        from mcts.osla_math import compute_osla_value
         depths = jnp.array([1, 1, 1, 1], dtype=jnp.int32)
         values = jnp.array([0.0, 0.0, 0.0, 1.0], dtype=jnp.float32)
         # rho=0.75: keep top 25% = top 1 = value 1.0; weight = lambda^1 = 0.8
@@ -188,7 +188,7 @@ class TestComputeOslaValue:
 
     def test_depth_weighting_discounts_deeper_sims(self):
         """Deeper sims get less weight (lam^depth); verifies weighted mean is computed correctly."""
-        from mcts.mcts_joint_osla import compute_osla_value
+        from mcts.osla_math import compute_osla_value
         depths = jnp.array([1, 5], dtype=jnp.int32)
         values = jnp.array([1.0, 0.5], dtype=jnp.float32)
         # rho=1.0: keep both. weights = [0.8^1, 0.8^5] = [0.8, 0.32768]
@@ -200,7 +200,7 @@ class TestComputeOslaValue:
 
     def test_jit_compatible(self):
         """Must be JIT-compilable."""
-        from mcts.mcts_joint_osla import compute_osla_value
+        from mcts.osla_math import compute_osla_value
         fn = jax.jit(compute_osla_value, static_argnames=("rho", "lam"))
         depths = jnp.array([1, 2, 3, 4], dtype=jnp.int32)
         values = jnp.array([0.1, 0.5, 0.2, 0.9], dtype=jnp.float32)
@@ -215,7 +215,7 @@ class TestOSLAHelpers:
 
     def test_compute_ucb_prefers_unvisited(self):
         """Unvisited children (visit_count=0) should have higher UCB than visited ones."""
-        from mcts.mcts_joint_osla import compute_ucb_scores
+        from mcts.osla_math import compute_ucb_scores
         child_visits = jnp.array([5.0, 0.0, 3.0, 0.0])
         child_q_diff = jnp.array([0.5, 0.0, 0.3, 0.0])
         prior_probs = jnp.array([0.25, 0.25, 0.25, 0.25])
@@ -229,7 +229,7 @@ class TestOSLAHelpers:
         assert ucb[3] > ucb[2]
 
     def test_compute_ucb_shape(self):
-        from mcts.mcts_joint_osla import compute_ucb_scores
+        from mcts.osla_math import compute_ucb_scores
         K = 10
         ucb = compute_ucb_scores(
             jnp.zeros(K), jnp.zeros(K), jnp.ones(K) / K, jnp.array(1.0),
@@ -269,7 +269,7 @@ class TestUCBLogVisitScaling:
         """The prior-exploration term must grow with log(parent_visits), not
         stay fixed — matches MuZero/MAZero's pb_c formula, not a constant
         c_puct."""
-        from mcts.mcts_joint_osla import compute_ucb_scores
+        from mcts.osla_math import compute_ucb_scores
 
         child_visits = jnp.zeros(3)
         prior_probs = jnp.ones(3) / 3
@@ -293,7 +293,7 @@ class TestUCBLogVisitScaling:
     def test_value_term_normalized_into_unit_range(self):
         """With running qmin/qmax stats present, the Q-baseline-diff term
         must be clipped into [0, 1] regardless of its raw scale."""
-        from mcts.mcts_joint_osla import compute_ucb_scores
+        from mcts.osla_math import compute_ucb_scores
 
         # Raw Q-baseline diffs of huge magnitude (as if value support were
         # [-5, 5] and Q-values routinely differ by several units) must not
@@ -325,7 +325,7 @@ class TestUCBLogVisitScaling:
         if search quality issues trace back to under-exploration of new
         children.
         """
-        from mcts.mcts_joint_osla import compute_ucb_scores
+        from mcts.osla_math import compute_ucb_scores
 
         child_q_diff = jnp.array([100.0, 100.0])  # would be huge if not masked
         child_visits = jnp.array([0.0, 0.0])
@@ -350,7 +350,7 @@ class TestUCBLogVisitScaling:
         so compute_ucb_scores itself really does return an all-zero
         vector here. The caller (_best_ucb) is responsible for not letting
         bare jnp.argmax on this vector silently ignore the prior."""
-        from mcts.mcts_joint_osla import compute_ucb_scores
+        from mcts.osla_math import compute_ucb_scores
 
         child_visits = jnp.zeros(4)
         prior_probs = jnp.array([0.05, 0.05, 0.05, 0.85])
@@ -487,7 +487,7 @@ class TestOSLAPerDepthQuantile:
         weighted_sum = lam**0 * 4 + lam**5 * 100
         tot_weight   = lam**0 * 1 + lam**5 * 1
         """
-        from mcts.mcts_joint_osla import compute_osla_value_jax
+        from mcts.osla_math import compute_osla_value_jax
 
         lam = 0.8
         sim_values = jnp.array([1.0, 2.0, 3.0, 4.0, 100.0, 0.0, 0.0, 0.0])
@@ -508,7 +508,7 @@ class TestOSLAPerDepthQuantile:
         """When every sim is at the same depth, per-depth-bucket ranking and
         pooled ranking are equivalent (there's only one bucket) — sanity
         check that the rewrite doesn't change single-depth behavior."""
-        from mcts.mcts_joint_osla import compute_osla_value_jax
+        from mcts.osla_math import compute_osla_value_jax
 
         sim_values = jnp.array([1.0, 2.0, 3.0, 4.0, 0.0])
         sim_depths = jnp.zeros(5, dtype=jnp.int32)
@@ -526,21 +526,21 @@ class TestOSLAPerDepthQuantile:
 class TestSampleKActions:
 
     def test_output_shapes(self):
-        from mcts.mcts_joint_osla import _sample_k_actions
+        from mcts.osla_math import _sample_k_actions
         rng = jax.random.PRNGKey(0)
         actions, probs = _sample_k_actions(rng, jnp.zeros(729), K=10, A_N=729)
         assert actions.shape == (10,)
         assert probs.shape == (10,)
 
     def test_actions_in_range(self):
-        from mcts.mcts_joint_osla import _sample_k_actions
+        from mcts.osla_math import _sample_k_actions
         rng = jax.random.PRNGKey(1)
         actions, probs = _sample_k_actions(rng, jnp.zeros(729), K=10, A_N=729)
         assert jnp.all(actions >= 0) and jnp.all(actions < 729)
 
     def test_probs_are_subset_of_softmax(self):
         """Returned probs must equal softmax(logits)[actions]."""
-        from mcts.mcts_joint_osla import _sample_k_actions
+        from mcts.osla_math import _sample_k_actions
         logits = jax.random.normal(jax.random.PRNGKey(2), (25,))
         actions, probs = _sample_k_actions(jax.random.PRNGKey(3), logits, K=5, A_N=25)
         expected_probs = jax.nn.softmax(logits)[actions]
@@ -548,7 +548,7 @@ class TestSampleKActions:
 
     def test_k_ge_an_uses_replacement(self):
         """K >= A_N must not crash (uses replacement)."""
-        from mcts.mcts_joint_osla import _sample_k_actions
+        from mcts.osla_math import _sample_k_actions
         actions, probs = _sample_k_actions(jax.random.PRNGKey(0), jnp.zeros(3), K=10, A_N=3)
         assert actions.shape == (10,)
 
@@ -576,7 +576,8 @@ class TestRunSingleSimBackup:
 
     def test_root_backup_value_single_step(self):
         """After 1 sim reaching depth 1: root_backup_value = r + gamma * V."""
-        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry, _sample_k_actions
+        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry
+        from mcts.osla_math import _sample_k_actions
 
         K, A_N, N, D, max_depth, gamma = 4, 25, 2, 8, 3, 0.99
         r, v = 0.5, 1.0  # fixed reward and value from the fake model
@@ -698,7 +699,7 @@ class TestComputeOslaValueJax:
 
     def test_matches_python_version(self):
         """JAX-native compute_osla_value_jax should match Python compute_osla_value."""
-        from mcts.mcts_joint_osla import compute_osla_value, compute_osla_value_jax
+        from mcts.osla_math import compute_osla_value, compute_osla_value_jax
         rng = np.random.default_rng(0)
         K = 10
         depths = np.array([1, 2, 3, 1, 2, 4, 1, 2, 3, 4], dtype=np.int32)
@@ -723,7 +724,7 @@ class TestComputeOslaValueJax:
         depth=2 has 1 sim (size_lim=max(1,ceil(1*0.75))=1 -> kept). So all 3
         valid sims are now included, each in its own depth bucket.
         """
-        from mcts.mcts_joint_osla import compute_osla_value_jax
+        from mcts.osla_math import compute_osla_value_jax
         values = jnp.array([1.0, 0.5, 0.8, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         depths = jnp.array([1, 2, 1, 0, 0, 0, 0, 0, 0, 0], dtype=jnp.int32)
         n_visits = jnp.array(3, jnp.int32)
@@ -763,7 +764,8 @@ class TestRootRoundRobin:
         child_index = node->visit_count - 1;` — the first K simulations must
         round-robin through the K sampled root actions before UCB selection
         kicks in, regardless of prior/value differences between them."""
-        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry, _sample_k_actions
+        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry
+        from mcts.osla_math import _sample_k_actions
         import mctx
 
         K, A_N, N, D, max_depth, gamma = 4, 25, 2, 8, 3, 0.99
