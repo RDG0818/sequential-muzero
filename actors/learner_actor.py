@@ -26,12 +26,10 @@ def scale_grad_half(x):
 
 
 def _scale_grad_half_fwd(x):
-    """Forward pass: identity."""
     return x, ()
 
 
 def _scale_grad_half_bwd(_, g):
-    """Backward pass: halve the gradient."""
     return (_jax.tree_util.tree_map(lambda gi: gi * 0.5, g),)
 
 
@@ -104,20 +102,14 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                 init_out.value_logits, value_target_dist[:, 0]
             )
 
-            # AWPO: weight root policy loss by action-level AWAC weights.
-            # Uses current V_net as baseline + batch normalization of advantages
-            # so the signal is non-trivial even when Q ≈ V ≈ 0 (MAZero formulation).
-            # When awpo_alpha=0 (disabled), this branch is eliminated at JIT
-            # trace time and reduces to plain mean cross-entropy.
+            # AWPO root policy loss (paper Eq. 10, 14); no-op mean CE when
+            # awpo_alpha=0 (branch eliminated at JIT trace time).
             ce_p0 = optax.softmax_cross_entropy(
                 init_out.policy_logits, batch.policy_target[:, 0]
             ).mean(axis=-1)  # (B,)
             if awpo_alpha > 0.0 and q_data is not None:
-                # Action-level AWPO (MAZero/AWAC formulation): weight each sampled
-                # root action by exp((Q_k - V_net - mean) / (std + eps) / alpha).
-                # V_net is the CURRENT network prediction (not stale stored value).
-                # Batch normalization ensures non-trivial gradient signal even when
-                # Q ≈ V ≈ 0 — critical for cold-start on sparse rewards like SMAX.
+                # Action-level AWPO: weight each sampled root action by
+                # exp((Q_k - V_net) / alpha), batch-normalized (_awpo_weight).
                 q_valid       = q_data["all_child_valid"][:, 0]      # (B,) bool — root position
                 q_k           = q_data["all_child_q"][:, 0]          # (B, K)
                 visits_k      = q_data["all_child_visits"][:, 0]     # (B, K)
@@ -261,16 +253,11 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
             policy_loss = (p0_loss + pi_losses.sum(axis=0)) / (U + 1)
             value_loss  = (v0_loss + vi_losses.sum(axis=0)) / (U + 1)
 
-            # ---- Multi-step SPR consistency ----
-            # For each k in 1..consistency_horizon and each valid start position t,
-            # compare project_online(h_t) against project_target(h_{t+k}).
-            # k=1 reproduces the original single-step consistency loss.
-            # k>1 adds longer-range targets, improving latent prediction accuracy
-            # over multiple dynamics steps (SPR, Schwarzer et al. 2021).
-            #
-            # XLA CSE: project_online(h_t) is only computed once regardless of how
-            # many k values reference h_t, so cost stays O(U+1) projections.
-            #
+            # ---- Multi-step SPR consistency (Schwarzer et al. 2021) ----
+            # For each k in 1..consistency_horizon and start t, compare
+            # project_online(h_t) vs project_target(h_{t+k}); k=1 is the
+            # original single-step loss. XLA CSE means project_online(h_t)
+            # is computed once regardless of how many k reference it.
             # all_hiddens[i] = h_i,  shape (U+1, B, N, D)
             all_hiddens = jnp.concatenate([hidden[jnp.newaxis], scan_hiddens], axis=0)
             cons_pairs = []
