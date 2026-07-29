@@ -1,4 +1,4 @@
-# utils/mpe_env_wrapper.py
+# envs/mpe_env_wrapper.py
 import jax
 import jaxmarl
 import numpy as np
