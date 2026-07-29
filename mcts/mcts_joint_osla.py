@@ -481,7 +481,7 @@ class MCTSJointOSLAPlanner(MCTSPlanner):
 
     Uses a custom JAX MCTS loop (not mctx) with PUCT selection,
     K sampled joint actions per node, and OS(λ) value aggregation.
-    Replaces MCTSJointPlanner when planner_mode="joint".
+    Selected via planner_mode="joint" (the default and only planner).
     """
 
     def __init__(self, model: FlaxMAMuZeroNet, config: ExperimentConfig):

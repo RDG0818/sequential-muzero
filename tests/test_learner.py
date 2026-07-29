@@ -1,4 +1,4 @@
-"""Tests for actors/learner_actor.py module-level utilities.
+"""Tests for actors/loss.py module-level utilities.
 
 Run with:
     conda run -n mazero pytest tests/test_learner.py -v

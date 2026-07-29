@@ -8,9 +8,9 @@ import jax.numpy as jnp
 
 
 def compute_osla_value_jax(
-    sim_values: chex.Array,
+    sim_values: chex.Array,   # [max_sims] float32 — padded with 0 after n_visits
     sim_depths: chex.Array,
-    n_visits: chex.Array,
+    n_visits: chex.Array,     # scalar int32 — number of valid entries
     rho: float,
     lam: float,
     max_depth: int,
@@ -56,10 +56,10 @@ def compute_osla_value(
 
 
 def compute_ucb_scores(
-    child_q_baseline_diff: chex.Array,
+    child_q_baseline_diff: chex.Array,  # [K] float32 — get_qsa(child) - parent.pred_value
     child_visits: chex.Array,
     prior_probs: chex.Array,
-    parent_visits: chex.Array,
+    parent_visits: chex.Array,  # [] float32 — total visits at parent BEFORE this simulation
     qmin: chex.Array,
     qmax: chex.Array,
     pb_c_base: float,

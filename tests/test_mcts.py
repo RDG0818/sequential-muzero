@@ -687,7 +687,7 @@ class TestMCTSJointOSLAPlanner:
 
 
 def test_reanalyze_actor_uses_osla_planner():
-    """ReanalyzeActor must use MCTSJointOSLAPlanner, not MCTSJointPlanner."""
+    """ReanalyzeActor's planner_map must map 'joint' to MCTSJointOSLAPlanner."""
     import pathlib
     src = (pathlib.Path(__file__).parent.parent / "actors" / "reanalyze_actor.py").read_text()
     assert '"joint": MCTSJointOSLAPlanner' in src, (
