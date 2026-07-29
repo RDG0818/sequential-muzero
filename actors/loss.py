@@ -1,0 +1,325 @@
+# actors/loss.py
+"""Pure-JAX loss/train-step logic for the learner — no Ray import, so this
+module is importable and unit-testable without spinning up a Ray actor."""
+
+import jax as _jax
+
+from config import ExperimentConfig
+
+
+@_jax.custom_vjp
+def scale_grad_half(x):
+    """Identity in forward pass; halves gradients in backward pass.
+
+    Used to prevent dynamics-network updates from dominating representation
+    gradients over long unrolls (MuZero paper §E, MAZero Appendix).
+    """
+    return x
+
+
+def _scale_grad_half_fwd(x):
+    return x, ()
+
+
+def _scale_grad_half_bwd(_, g):
+    return (_jax.tree_util.tree_map(lambda gi: gi * 0.5, g),)
+
+
+scale_grad_half.defvjp(_scale_grad_half_fwd, _scale_grad_half_bwd)
+
+
+def _awpo_weight(q: '_jax.Array', v_baseline: '_jax.Array', alpha: float) -> '_jax.Array':
+    """AWAC-style exponential advantage weight, batch-normalized.
+
+    `v_baseline` is stop-gradiented: the AWPO weight must act as a fixed
+    multiplier on the policy loss, not a term the value head can shrink or
+    grow to inflate its own weighting.
+    """
+    v_baseline = _jax.lax.stop_gradient(v_baseline)
+    if v_baseline.ndim < q.ndim:
+        v_baseline = v_baseline[..., None]
+    adv_raw = q - v_baseline
+    adv_mean = adv_raw.mean()
+    adv_std = adv_raw.std()
+    adv_norm = (adv_raw - adv_mean) / (adv_std + 1e-8)
+    return _jax.numpy.exp(_jax.numpy.clip(adv_norm / alpha, -5.0, 5.0))
+
+
+def make_train_step(model, optimizer, value_support, reward_support, config: ExperimentConfig):
+    """
+    Returns a JIT-compiled training step function.
+
+    Captures model, optimizer, supports, and config in a closure so JIT only
+    traces once — no static_argnames needed.
+
+    JAX is imported lazily here; this function is only ever called from
+    LearnerActor.__init__ after JAX has already been imported in that process.
+    """
+    import jax
+    import jax.numpy as jnp
+    import optax
+    from utils.transforms import scalar_to_support, support_to_scalar
+
+    U = config.train.unroll_steps
+    value_scale = config.train.value_scale
+    consistency_scale = config.train.consistency_scale
+    # Clamp horizon to U so range(U+1-k) is always ≥ 1.
+    consistency_horizon = min(int(config.train.consistency_horizon), U)
+    awpo_alpha = float(config.train.awpo_alpha)  # 0.0 = disabled
+    K = config.mcts.num_gumbel_samples   # static: K sampled joint actions per MCTS node
+    N = config.train.num_agents          # static: number of agents
+
+    def train_step(params, opt_state, batch, weights, rng_key, ema_params, q_data=None):
+        # Pre-compute categorical support targets outside loss_fn so they
+        # are constants w.r.t. the gradient — zero gradient flows through them.
+        value_target_dist = scalar_to_support(
+            batch.value_target.mean(axis=2), value_support
+        )   # (B, U+1, Sv)
+        reward_target_dist = scalar_to_support(
+            batch.reward_target.mean(axis=2), reward_support
+        )   # (B, U, Sr)
+
+        def loss_fn(p):
+            rng_init, _, rng_unroll = jax.random.split(rng_key, 3)
+            unroll_keys = jax.random.split(rng_unroll, U)  # (U, 2)
+
+            # ---- Step 0: initial inference ----
+            init_out = model.apply(
+                {"params": p}, batch.observation, rngs={"dropout": rng_init}
+            )
+            hidden = init_out.hidden_state  # (B, N, D)
+
+            # Centralized value → (B,)
+            v0_loss = optax.softmax_cross_entropy(
+                init_out.value_logits, value_target_dist[:, 0]
+            )
+
+            # AWPO root policy loss (paper Eq. 10, 14); no-op mean CE when
+            # awpo_alpha=0 (branch eliminated at JIT trace time).
+            ce_p0 = optax.softmax_cross_entropy(
+                init_out.policy_logits, batch.policy_target[:, 0]
+            ).mean(axis=-1)  # (B,)
+            if awpo_alpha > 0.0 and q_data is not None:
+                # Action-level AWPO: weight each sampled root action by
+                # exp((Q_k - V_net) / alpha), batch-normalized (_awpo_weight).
+                q_valid       = q_data["all_child_valid"][:, 0]      # (B,) bool — root position
+                q_k           = q_data["all_child_q"][:, 0]          # (B, K)
+                visits_k      = q_data["all_child_visits"][:, 0]     # (B, K)
+                child_actions = q_data["all_child_actions"][:, 0]    # (B, K, N)
+
+                # Current network value prediction as AWAC baseline (not stale MCTS value)
+                v_net = support_to_scalar(init_out.value_logits, value_support)  # (B,)
+                awpo_w_k = _awpo_weight(q_k, v_net, awpo_alpha)  # (B, K)
+
+                # Per-agent log-probs for each sampled joint action:
+                # log_probs[b, n, a] → gather with child_actions[b, k, n]
+                log_probs = jax.nn.log_softmax(init_out.policy_logits, axis=-1)  # (B, N, A)
+                B_, K_ = q_k.shape
+                N_, A_ = log_probs.shape[1], log_probs.shape[2]
+                # Expand log_probs to (B, K, N, A) and gather at child_actions
+                log_probs_exp = jnp.broadcast_to(
+                    log_probs[:, None, :, :], (B_, K_, N_, A_)
+                )
+                gathered = jnp.take_along_axis(
+                    log_probs_exp,
+                    child_actions[:, :, :, None],  # (B, K, N, 1)
+                    axis=-1,
+                ).squeeze(-1)  # (B, K, N)
+                joint_log_prob_k = gathered.sum(axis=-1)  # (B, K)
+
+                # Visit-count-weighted AWPO loss
+                visit_weights = visits_k / (visits_k.sum(axis=-1, keepdims=True) + 1e-8)
+                action_awpo_loss = -(visit_weights * awpo_w_k * joint_log_prob_k).sum(axis=-1)  # (B,)
+
+                # Fall back to plain CE for items where Q-data was not stored
+                p0_loss = jnp.where(q_valid, action_awpo_loss, ce_p0)  # (B,)
+            elif awpo_alpha > 0.0:
+                # No Q-data available (e.g. non-OSLA planner): state-level fallback
+                v_mcts = batch.value_target[:, 0].mean(axis=-1)  # (B,)
+                v_net = support_to_scalar(init_out.value_logits, value_support)  # (B,)
+                awpo_w = _awpo_weight(v_mcts, v_net, awpo_alpha)
+                p0_loss = awpo_w * ce_p0  # (B,)
+            else:
+                p0_loss = ce_p0  # (B,)
+
+            # ---- Steps 1..U: unroll via scan ----
+            # Consistency is computed outside the scan so multi-step pairs
+            # (h_t, h_{t+k}) for k>1 can reuse the same hidden states.
+            if awpo_alpha > 0.0:
+                # Build per-step Q-data for the scan (positions 1..U).
+                # When q_data is None (non-OSLA planner), pass zeros with all-invalid mask
+                # so scan_step always has the same input structure.
+                if q_data is not None:
+                    step_q_acts  = jnp.moveaxis(q_data["all_child_actions"][:, 1:], 1, 0)  # (U, B, K, N)
+                    step_q_q     = jnp.moveaxis(q_data["all_child_q"][:, 1:],       1, 0)  # (U, B, K)
+                    step_q_vis   = jnp.moveaxis(q_data["all_child_visits"][:, 1:],  1, 0)  # (U, B, K)
+                    step_q_valid = jnp.moveaxis(q_data["all_child_valid"][:, 1:],   1, 0)  # (U, B)
+                else:
+                    B_ = batch.observation.shape[0]
+                    step_q_acts  = jnp.zeros((U, B_, K, N), jnp.int32)
+                    step_q_q     = jnp.zeros((U, B_, K),    jnp.float32)
+                    step_q_vis   = jnp.zeros((U, B_, K),    jnp.float32)
+                    step_q_valid = jnp.zeros((U, B_),       jnp.bool_)
+
+                xs = (
+                    jnp.moveaxis(batch.actions, 1, 0),
+                    jnp.moveaxis(reward_target_dist, 1, 0),
+                    jnp.moveaxis(batch.policy_target[:, 1:], 1, 0),
+                    jnp.moveaxis(value_target_dist[:, 1:], 1, 0),
+                    unroll_keys,
+                    step_q_acts,
+                    step_q_q,
+                    step_q_vis,
+                    step_q_valid,
+                )
+
+                def scan_step(hidden, inputs):
+                    ai, ri_dist, pi_target, vi_dist, step_key, qd_acts, qd_q, qd_vis, qd_valid = inputs
+                    hidden = scale_grad_half(hidden)
+                    out = model.apply(
+                        {"params": p}, hidden, ai,
+                        method=model.recurrent_inference,
+                        rngs={"dropout": step_key},
+                    )
+                    next_hidden = out.hidden_state
+                    ri_loss = optax.softmax_cross_entropy(out.reward_logits, ri_dist)
+                    vi_loss = optax.softmax_cross_entropy(out.value_logits, vi_dist)
+
+                    # AWPO at this unroll step (mirrors root step computation)
+                    ce_loss = optax.softmax_cross_entropy(
+                        out.policy_logits, pi_target
+                    ).mean(axis=-1)  # (B,) fallback
+                    v_net_step = support_to_scalar(out.value_logits, value_support)  # (B,)
+                    awpo_w = _awpo_weight(qd_q, v_net_step, awpo_alpha)  # (B, K)
+                    B_ = qd_q.shape[0]
+                    K_ = qd_q.shape[1]
+                    N_ = out.policy_logits.shape[1]
+                    A_ = out.policy_logits.shape[2]
+                    log_probs = jax.nn.log_softmax(out.policy_logits, axis=-1)      # (B, N, A)
+                    lp_exp = jnp.broadcast_to(log_probs[:, None, :, :], (B_, K_, N_, A_))
+                    gathered = jnp.take_along_axis(
+                        lp_exp, qd_acts[:, :, :, None], axis=-1
+                    ).squeeze(-1)                                                    # (B, K, N)
+                    jlp_k = gathered.sum(axis=-1)                                   # (B, K)
+                    vis_w = qd_vis / (qd_vis.sum(axis=-1, keepdims=True) + 1e-8)   # (B, K)
+                    awpo_loss = -(vis_w * awpo_w * jlp_k).sum(axis=-1)             # (B,)
+                    pi_loss = jnp.where(qd_valid, awpo_loss, ce_loss)              # (B,)
+
+                    return next_hidden, (ri_loss, pi_loss, vi_loss, next_hidden)
+
+            else:
+                xs = (
+                    jnp.moveaxis(batch.actions, 1, 0),
+                    jnp.moveaxis(reward_target_dist, 1, 0),
+                    jnp.moveaxis(batch.policy_target[:, 1:], 1, 0),
+                    jnp.moveaxis(value_target_dist[:, 1:], 1, 0),
+                    unroll_keys,
+                )
+
+                def scan_step(hidden, inputs):
+                    ai, ri_dist, pi_target, vi_dist, step_key = inputs
+                    hidden = scale_grad_half(hidden)  # half-gradient on hidden states (MuZero paper §E)
+                    out = model.apply(
+                        {"params": p}, hidden, ai,
+                        method=model.recurrent_inference,
+                        rngs={"dropout": step_key},
+                    )
+                    next_hidden = out.hidden_state
+                    ri_loss = optax.softmax_cross_entropy(out.reward_logits, ri_dist)
+                    pi_loss = optax.softmax_cross_entropy(
+                        out.policy_logits, pi_target
+                    ).mean(axis=-1)
+                    vi_loss = optax.softmax_cross_entropy(out.value_logits, vi_dist)
+                    # next_hidden returned as output so the caller can collect all
+                    # hidden states for multi-step consistency.
+                    return next_hidden, (ri_loss, pi_loss, vi_loss, next_hidden)
+
+            # Transpose to step-major for scan: (B, U, ...) → (U, B, ...)
+            _, (ri_losses, pi_losses, vi_losses, scan_hiddens) = jax.lax.scan(
+                scan_step, hidden, xs
+            )
+            # ri_losses, pi_losses, vi_losses: (U, B)
+            # scan_hiddens: (U, B, N, D) — h_1 through h_U
+
+            reward_loss = ri_losses.mean(axis=0)
+            policy_loss = (p0_loss + pi_losses.sum(axis=0)) / (U + 1)
+            value_loss  = (v0_loss + vi_losses.sum(axis=0)) / (U + 1)
+
+            # ---- Multi-step SPR consistency (Schwarzer et al. 2021) ----
+            # For each k in 1..consistency_horizon and start t, compare
+            # project_online(h_t) vs project_target(h_{t+k}); k=1 is the
+            # original single-step loss. XLA CSE means project_online(h_t)
+            # is computed once regardless of how many k reference it.
+            # all_hiddens[i] = h_i,  shape (U+1, B, N, D)
+            all_hiddens = jnp.concatenate([hidden[jnp.newaxis], scan_hiddens], axis=0)
+            cons_pairs = []
+            for k in range(1, consistency_horizon + 1):
+                for t in range(U + 1 - k):
+                    h_t  = all_hiddens[t]        # (B, N, D)
+                    h_tk = all_hiddens[t + k]    # (B, N, D)
+                    online = model.apply(
+                        {"params": p}, h_t, method=model.project_online
+                    )
+                    target = model.apply(
+                        {"params": ema_params}, h_tk, method=model.project_target
+                    )
+                    B_, N_, D_ = online.shape
+                    # epsilon=1e-8 prevents 0/0 NaN with near-zero projection norms
+                    # (common early in training and with dead-agent zeroed obs).
+                    sim = optax.cosine_similarity(
+                        online.reshape(B_ * N_, D_),
+                        target.reshape(B_ * N_, D_),
+                        epsilon=1e-8,
+                    ).reshape(B_, N_).mean(axis=-1)  # (B,)
+                    cons_pairs.append(-sim)
+            consistency_loss = jnp.stack(cons_pairs).mean(axis=0)  # (B,)
+
+            loss = (
+                reward_loss
+                + policy_loss
+                + value_loss * value_scale
+                + consistency_loss * consistency_scale
+            )
+            total_loss = (loss * weights).mean()
+
+            td_error = jnp.abs(
+                support_to_scalar(init_out.value_logits, value_support)
+                - batch.value_target[:, 0].mean(axis=1)
+            )
+
+            policy_probs = jax.nn.softmax(init_out.policy_logits, axis=-1)  # (B, N, A)
+            policy_entropy = -jnp.sum(
+                policy_probs * jnp.log(policy_probs + 1e-8), axis=-1
+            ).mean()  # scalar; uniform over 9 actions = log(9) ≈ 2.197
+
+            metric_scalars = jnp.stack([
+                total_loss,
+                reward_loss.mean(),
+                policy_loss.mean(),
+                value_loss.mean(),
+                consistency_loss.mean(),
+                policy_entropy,
+            ])
+            return total_loss, (metric_scalars, td_error)
+
+        (_, (metric_scalars, td_error)), grads = jax.value_and_grad(
+            loss_fn, has_aux=True
+        )(params)
+        grad_norm = optax.global_norm(grads)
+
+        updates, new_opt_state = optimizer.update(grads, opt_state, params)
+        new_params = optax.apply_updates(params, updates)
+        new_priorities = td_error + 1e-6
+
+        # Pack all scalars that need D2H transfer into one contiguous array so
+        # the host pays for a single PCIe DMA transaction instead of one per scalar.
+        # Layout: [total, reward, policy, value, consistency, grad_norm, priorities...]
+        transfer_buf = jnp.concatenate([
+            metric_scalars,
+            grad_norm[jnp.newaxis],
+            new_priorities,
+        ])
+
+        return new_params, new_opt_state, transfer_buf, new_priorities
+
+    return jax.jit(train_step)

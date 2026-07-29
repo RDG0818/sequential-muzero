@@ -15,7 +15,7 @@ def test_scale_grad_half_forward_is_identity():
     """scale_grad_half should be identity in the forward pass."""
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     os.environ["JAX_PLATFORMS"] = "cpu"
-    from actors.learner_actor import scale_grad_half
+    from actors.loss import scale_grad_half
     x = jnp.array([1.0, 2.0, 3.0])
     assert jnp.allclose(scale_grad_half(x), x)
 
@@ -24,7 +24,7 @@ def test_scale_grad_half_backward_halves_gradient():
     """scale_grad_half backward pass should halve the gradient."""
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     os.environ["JAX_PLATFORMS"] = "cpu"
-    from actors.learner_actor import scale_grad_half
+    from actors.loss import scale_grad_half
     x = jnp.array([1.0, 2.0, 3.0])
     grad_fn = jax.grad(lambda v: scale_grad_half(v).sum())
     g = grad_fn(x)
@@ -121,7 +121,7 @@ def test_awpo_weight_stops_gradient_into_baseline():
     value head instead of acting as a fixed advantage-weighted multiplier."""
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     os.environ["JAX_PLATFORMS"] = "cpu"
-    from actors.learner_actor import _awpo_weight
+    from actors.loss import _awpo_weight
 
     q = jnp.array([1.0, 0.0])  # (B,) fixed targets, independent of the param under test
 
@@ -141,7 +141,7 @@ def test_awpo_weight_is_scale_invariant():
     sequential-muzero's `_awpo_weight` already normalizes correctly."""
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     os.environ["JAX_PLATFORMS"] = "cpu"
-    from actors.learner_actor import _awpo_weight
+    from actors.loss import _awpo_weight
 
     v_baseline = jnp.zeros(1)
     small_q = jnp.array([[0.1, 0.2, 0.1, 0.2]])   # std ~ 0.05
