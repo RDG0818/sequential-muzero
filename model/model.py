@@ -181,8 +181,7 @@ class FlaxMAMuZeroNet(nn.Module):
     Exposes three callable paths:
       __call__            — initial inference (observation → latent + predictions)
       recurrent_inference — dynamics unroll (latent + action → next latent + predictions)
-      predict             — prediction head only (used by MCTSIndependentPlanner for
-                            prior policies of non-searching agents during each search step)
+      predict             — prediction head only, no dynamics
 
     And two projection methods for the EMA consistency loss:
       project_online  — projection + prediction head (current/online latent)
@@ -200,17 +199,6 @@ class FlaxMAMuZeroNet(nn.Module):
                 hidden_size=self.config.hidden_state_size,
                 dropout_rate=self.config.dropout_rate,
             )
-            # Separate communication module for pre-search root attention.
-            # Distinct params from dynamics attention — serves a different role
-            # (agents sharing intent at the root vs. coordinating during transitions).
-            self.communication_net = TransformerAttentionEncoder(
-                num_layers=self.config.attention_layers,
-                num_heads=self.config.attention_heads,
-                hidden_size=self.config.hidden_state_size,
-                dropout_rate=self.config.dropout_rate,
-            )
-        else:
-            self.communication_net = None
         self.representation_net = RepresentationNetwork(
             hidden_state_size=self.config.hidden_state_size,
             fc_layers=self.config.fc_representation_layers,
@@ -263,7 +251,6 @@ class FlaxMAMuZeroNet(nn.Module):
             self.dynamics_net(hidden_states, dummy_actions, deterministic=True)
             self.project_online(hidden_states)
             self.project_target(hidden_states)
-            self.communicate(hidden_states)
 
         return MuZeroOutput(
             hidden_state=hidden_states,
@@ -304,8 +291,6 @@ class FlaxMAMuZeroNet(nn.Module):
     def predict(self, hidden_states: chex.Array) -> tuple[chex.Array, chex.Array]:
         """
         Runs only the prediction head (no dynamics).
-        Used by MCTSIndependentPlanner to get prior policies for non-searching
-        agents during each agent's search step.
 
         Args:
             hidden_states: Latent states. Shape: (B, N, D_hidden)
@@ -315,24 +300,6 @@ class FlaxMAMuZeroNet(nn.Module):
             value_logits:  Shape: (B, S)
         """
         return self.prediction_net(hidden_states)
-
-    def communicate(self, hidden_states: chex.Array) -> chex.Array:
-        """
-        Cross-agent attention pass over root latent states.
-
-        Called by MCTSIndependentPlanner before each agent's independent search
-        so that each agent's root embedding reflects the other agents' current
-        policy state. No-op when attention_type != "transformer".
-
-        Args:
-            hidden_states: Root latent states. Shape: (B, N, D)
-
-        Returns:
-            Communication-augmented latent states. Shape: (B, N, D)
-        """
-        if self.communication_net is None:
-            return hidden_states
-        return self.communication_net(hidden_states, deterministic=True)
 
     def project_online(self, hidden_state: chex.Array) -> chex.Array:
         """

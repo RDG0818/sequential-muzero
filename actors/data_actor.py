@@ -75,7 +75,7 @@ class DataActor:
             logger.error(f"(DataActor {actor_id}) JAX device init failed: {e}")
             raise
         from model import FlaxMAMuZeroNet
-        from mcts import MCTSIndependentPlanner, MCTSJointPlanner, MCTSJointOSLAPlanner
+        from mcts import MCTSJointOSLAPlanner
         from envs import make_vec_env_wrapper
 
         self.actor_id = actor_id
@@ -94,11 +94,7 @@ class DataActor:
         )
 
         model = FlaxMAMuZeroNet(config.model, action_size)
-        planner_map = {
-            "independent": MCTSIndependentPlanner,
-            "joint": MCTSJointOSLAPlanner,        # OS(λ) planner replaces mctx-based joint
-            "joint_legacy": MCTSJointPlanner,     # keep for ablations
-        }
+        planner_map = {"joint": MCTSJointOSLAPlanner}
         if config.mcts.planner_mode not in planner_map:
             raise ValueError(
                 f"Unknown planner_mode '{config.mcts.planner_mode}'. "

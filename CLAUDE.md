@@ -103,7 +103,7 @@ configs/
     default.yaml          # model architecture hyperparameters
     smax.yaml             # SMAX overrides: deeper nets, 3-layer 8-head attn, tight value support
   mcts/
-    default.yaml          # MCTS hyperparameters (independent planner)
+    default.yaml          # MCTS hyperparameters (base defaults; joint planner)
     joint.yaml            # joint planner preset (50 sims, rho=0.25, K=5)
     smax.yaml             # SMAX MCTS preset (100 sims; paper value)
   train/
@@ -124,13 +124,11 @@ baselines/
 training/
   loop.py                 # run_warmup(), run_training_loop(), run_training_loop_sync()
 model/
-  model.py                # FlaxMAMuZeroNet and sub-networks; communicate() for root attention
+  model.py                # FlaxMAMuZeroNet and sub-networks
   attention.py            # TransformerAttentionEncoder
   layers.py               # MLP
 mcts/
   base.py                 # MCTSPlanner base class, MCTSPlanOutput
-  mcts_independent.py     # MCTSIndependentPlanner; uses model.communicate() before each search
-  mcts_joint.py           # MCTSJointPlanner (legacy mctx-based; used as joint_legacy)
   mcts_joint_osla.py      # MCTSJointOSLAPlanner — custom JAX MCTS with OS(λ) per-node backup
 envs/
   __init__.py             # make_env_wrapper / make_vec_env_wrapper factory functions
@@ -162,14 +160,13 @@ tests/
 **Param sync protocol**: `get_params()` returns `{"params": ..., "norm_state": ...}` where `norm_state` is `None` when obs normalization is disabled, or a plain numpy dict `{mean, var, initialized}` that actors apply manually (avoiding a JAX import in the normalization path).
 
 **World model** (`model/`):
-- `FlaxMAMuZeroNet`: top-level Flax module with four sub-networks + a communication net.
+- `FlaxMAMuZeroNet`: top-level Flax module with four sub-networks.
   - `RepresentationNetwork`: per-agent observation → latent state `(B, N, D)`.
   - `DynamicsNetwork`: latent + joint action → next latent + reward logits. Optionally prepends `TransformerAttentionEncoder` for inter-agent communication during transitions.
   - `PredictionNetwork`: latent → per-agent policy logits `(B, N, A)` + centralized value logits.
   - `ProjectionNetwork`: BYOL-style EMA consistency head. Online branch applies projection + prediction MLP; target branch applies projection only using a slowly-moving EMA copy of the params (`ema_decay=0.999`, updated in `LearnerActor._train_step()` asynchronously on GPU).
-  - `communicate()`: separate `TransformerAttentionEncoder` (distinct params from dynamics attention) for pre-search cross-agent attention in `MCTSIndependentPlanner`. No-op when `attention_type != "transformer"`. Controlled by `use_root_communication` in `MCTSConfig`.
 - Reward and value are **categorical distributions** over a discrete support (tz-transform). Use `utils.transforms.scalar_to_support` / `support_to_scalar` to convert. The scaling functions are `muzero_scale` / `muzero_scale_inv` (in `utils/transforms.py`).
-- `model.__call__` = initial inference; `model.recurrent_inference` = dynamics unroll (used inside MCTS simulations); `model.predict` = prediction head only (used by `MCTSIndependentPlanner` for non-searching agent priors).
+- `model.__call__` = initial inference; `model.recurrent_inference` = dynamics unroll (used inside MCTS simulations); `model.predict` = prediction head only, no dynamics.
 
 **Training loss** (`actors/learner_actor.py`):
 - `scale_grad_half`: custom VJP — identity forward, 0.5× backward. Applied to hidden states between unroll steps to prevent dynamics gradients from dominating representation gradients (MuZero paper §E, MAZero Appendix).
@@ -178,9 +175,7 @@ tests/
 
 **MCTS planners** (`mcts/`):
 - `MCTSPlanner` (base): common config, `DiscreteSupport` objects, Dirichlet noise. Public entry point: `planner.plan(params, rng_key, obs)`.
-- `MCTSIndependentPlanner`: one `gumbel_muzero_policy` search per agent via `jax.lax.scan`; other agents fixed to prior argmax during each agent's search. Optionally calls `model.communicate()` on root latents before each search when `use_root_communication=True`. Uses mctx.
-- `MCTSJointPlanner` (`joint_legacy`): single search over `A^N` joint space with mctx. Mean backup. Kept for ablations.
-- `MCTSJointOSLAPlanner` (`joint`, default for SMAX): custom JAX MCTS (not mctx). Per-node OS(λ) backup — each node tracks per-simulation values/depths; UCB selection uses OS(λ)-estimated Q-values (top (1-rho) quantile weighted by λ^depth). Vmapped over B environments; `jax.lax.fori_loop` over simulations. Matches MAZero algorithm exactly.
+- `MCTSJointOSLAPlanner` (`joint`, the only planner, default everywhere): custom JAX MCTS (not mctx's search — `mctx.RecurrentFnOutput` is reused as a plain return-type container). Per-node OS(λ) backup — each node tracks per-simulation values/depths; UCB selection uses OS(λ)-estimated Q-values (top (1-rho) quantile weighted by λ^depth). Vmapped over B environments; `jax.lax.fori_loop` over simulations. Matches MAZero algorithm exactly.
 
 **Data flow**: `observation (B,N,obs_dim)` → [obs normalization] → representation → latent `(B,N,D)` → MCTS (calls `recurrent_inference` inside simulations) → `MCTSPlanOutput` → `Transition` → `Episode` → `process_episode` (n-step returns) → `ReplayItem` → `ReplayBuffer`.
 
@@ -188,7 +183,6 @@ tests/
 
 Notable config fields added since original docs:
 - `ModelConfig.use_obs_normalization: bool` — enables `ObsRunningNorm` in the learner; default `false`
-- `MCTSConfig.use_root_communication: bool` — enables `model.communicate()` before independent search
 - `TrainConfig.consistency_horizon: int` — SPR multi-step horizon (1 = original, default in default.yaml)
 - `TrainConfig.awpo_alpha: float` — AWPO temperature; 0.0 = disabled (default), 1.0 for SMAX
 
@@ -276,8 +270,6 @@ adv_clip: 3.0           # we clip advantage to [-5, 5] in exp() before normalizi
 
 **Reanalyze flow**: MAZero's reanalyze workers preprocess full batches (re-encode observations, re-run MCTS, compute importance ratios) and push results to a `batch_storage` queue that the trainer consumes. This is the throughput bottleneck — hence 20–30 reanalyze actors on an A100. Our `ReanalyzeActor` is simpler: sample root observations, re-run MCTS, update only position-0 policy/value targets in-place.
 
-**No `communicate()` in MAZero**: The separate pre-search root attention pass is our addition.
-
 ### What We Preserved from the Paper
 
 - OS(λ) backup: `rho`, `lambda`, quantile-weighted Q-estimation, top-(1-rho) filtering
@@ -319,7 +311,7 @@ Items marked **[easy]** are straightforward; **[medium]** require more design wo
 
 - **[medium] Temperature annealing** — Gumbel MuZero's `max_num_considered_actions` acts like temperature. Anneal it down over training (high early for exploration, low late for exploitation). Currently fixed at `num_gumbel_samples`.
 
-- **[medium] Factored policy targets** — for `MCTSJointPlanner`, the current marginal extraction (summing over other agents' axes) discards coordination information. An alternative: keep the full joint policy as the target and train with a factored policy head that explicitly models correlations.
+- **[medium] Factored policy targets** — for `MCTSJointOSLAPlanner`, the current marginal extraction (summing over other agents' axes) discards coordination information. An alternative: keep the full joint policy as the target and train with a factored policy head that explicitly models correlations.
 
 - **[research] Count-based / intrinsic exploration** — add an exploration bonus to the MCTS root value based on visitation counts or a learned density model. Helps in sparse-reward cooperative tasks where the agents need to discover coordinated behaviors.
 

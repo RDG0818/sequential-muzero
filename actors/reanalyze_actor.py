@@ -69,7 +69,7 @@ class ReanalyzeActor:
             logger.error(f"(ReanalyzeActor {actor_id}) JAX device init failed: {e}")
             raise
         from model import FlaxMAMuZeroNet
-        from mcts import MCTSIndependentPlanner, MCTSJointPlanner, MCTSJointOSLAPlanner
+        from mcts import MCTSJointOSLAPlanner
 
         self.actor_id = actor_id
         self.config = config
@@ -79,11 +79,7 @@ class ReanalyzeActor:
         self.rng_key = jax.random.PRNGKey(actor_id * 2718 + 42)
 
         model = FlaxMAMuZeroNet(config.model, action_size)
-        planner_map = {
-            "independent": MCTSIndependentPlanner,
-            "joint": MCTSJointOSLAPlanner,
-            "joint_legacy": MCTSJointPlanner,
-        }
+        planner_map = {"joint": MCTSJointOSLAPlanner}
         if config.mcts.planner_mode not in planner_map:
             raise ValueError(
                 f"Unknown planner_mode '{config.mcts.planner_mode}'. "

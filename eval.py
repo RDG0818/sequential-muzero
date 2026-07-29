@@ -40,7 +40,7 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
     import orbax.checkpoint as ocp
     from pathlib import Path
     from model import FlaxMAMuZeroNet
-    from mcts import MCTSIndependentPlanner, MCTSJointPlanner
+    from mcts import MCTSJointOSLAPlanner
     from envs import make_vec_env_wrapper
 
     is_smac = not config.train.env_name.startswith("MPE_")
@@ -84,7 +84,7 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
     params = restored["params"]
     step = int(restored["step"])
 
-    planner_map = {"independent": MCTSIndependentPlanner, "joint": MCTSJointPlanner}
+    planner_map = {"joint": MCTSJointOSLAPlanner}
     planner = planner_map[config.mcts.planner_mode](model=model, config=config)
     plan_fn = jax.jit(planner.plan)
 
