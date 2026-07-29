@@ -21,12 +21,11 @@ def compute_osla_value_jax(
     lam: float,
     max_depth: int,           # static — number of depth buckets to scan (0..max_depth-1)
 ) -> chex.Array:
-    """JAX-native OS(λ), matching MAZero's `SubTreeValueSet`: the top
-    (1-rho) quantile is selected SEPARATELY within each depth bucket, then
-    buckets are combined with lambda^depth weighting. Uses a single global
-    sort plus a per-bucket cumulative rank (rather than one argsort per
-    depth bucket) to stay O(max_sims log max_sims) instead of
-    O(max_depth * max_sims log max_sims).
+    """OS(λ) value estimate, paper Eq. 5-7 (top-(1-rho) quantile per depth
+    bucket, weighted by lambda^depth), matching MAZero's `SubTreeValueSet`.
+    Uses one global sort + per-bucket cumulative rank instead of one argsort
+    per depth bucket: O(max_sims log max_sims) instead of O(max_depth *
+    max_sims log max_sims).
     """
     max_sims = sim_values.shape[0]
     valid_mask = jnp.arange(max_sims) < n_visits
@@ -216,14 +215,10 @@ def _run_single_sim(
             child_q_baseline_diff, child_visits, prior_probs, parent_visits,
             carry.qmin, carry.qmax, pb_c_base, pb_c_init, value_delta_lb,
         )
-        # Tie-break toward the highest-prior child: when a node has just
-        # been expanded (visit_count==1), parent_visits=0 makes pb_c=0 for
-        # every child, and unvisited children also score value_score=0, so
-        # the whole UCB vector is [0, ..., 0]. Without this epsilon,
-        # argmax would deterministically pick index 0 regardless of prior,
-        # defeating prior-guided exploration at every node's first
-        # internal descent. 1e-6 is small enough to only break exact ties,
-        # not perturb genuine UCB comparisons.
+        # At a freshly-expanded node (parent_visits=0), UCB is all-zero for
+        # every child, so bare argmax always picks index 0 regardless of
+        # prior. The 1e-6*prior tie-break fixes that without perturbing
+        # genuine (non-degenerate) UCB comparisons.
         ucb_choice = jnp.argmax(ucb + 1e-6 * prior_probs).astype(jnp.int32)
         is_root = node_idx == 0
         root_visits = tree.visit_counts[0]
@@ -320,11 +315,8 @@ def _run_single_sim(
     path_rewards = sc.path_rewards.at[leaf_depth].set(leaf_reward)
 
     # ── 4. Backup ─────────────────────────────────────────────────────────────
-    # Walk from leaf (leaf_depth) up to root (depth 0), updating visit_counts and value_sum.
-    # V at each node = reward_into_that_node + gamma * V_below.
-    # We go from leaf upward: at step k=0, update leaf (depth=leaf_depth) with V=leaf_value.
-    # At step k=1, update parent (depth=leaf_depth-1) with V = reward[leaf] + gamma * leaf_value.
-    # etc.
+    # Leaf-to-root walk: V(node) = reward_into_node + gamma * V(child). Step k
+    # updates the node at depth (leaf_depth - k), starting at the leaf (k=0).
     def backup_step(k, bcarry):
         btree, V, qmin, qmax = bcarry
         i = leaf_depth - k   # depth index: leaf_depth, leaf_depth-1, ..., 0
@@ -346,12 +338,10 @@ def _run_single_sim(
             node_sim_values=new_nsv, node_sim_depths=new_nsd,
         )
 
-        # Running min/max Q-baseline-diff, for non-root nodes only (matches
-        # MAZero: `if (i != 0) minmax_stat.insert(...)`). Uses this
-        # simulation's own backed-up value V as the node's Q signal rather
-        # than recomputing the full OS(λ) estimate here, which would need
-        # an extra O(num_simulations) argsort per backup step — the running
-        # bound only needs to stay roughly representative, not exact.
+        # Running min/max Q-baseline-diff over non-root nodes only (matches
+        # MAZero's `if (i != 0) minmax_stat.insert(...)`). Uses this sim's own
+        # backed-up V as the Q signal instead of a full OS(λ) recompute here —
+        # the running bound only needs to stay roughly representative.
         is_root = i == 0
         parent_node_i = jnp.where(valid & ~is_root, path_nodes[jnp.maximum(i - 1, 0)], 0)
         qsa_diff = path_rewards[jnp.maximum(i, 0)] + gamma * V - btree.pred_value[parent_node_i]
