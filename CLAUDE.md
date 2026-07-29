@@ -46,7 +46,7 @@ python setup.py build_ext --inplace
 # Run training
 python train/muzero.py                                  # default config (MPE simple_spread)
 python train/muzero.py train=smax_3m model=smax mcts=joint  # SMAX 3m (primary target)
-python train/muzero.py mcts=joint                       # switch to joint planner
+python train/muzero.py mcts=joint                       # lighter 50-sim preset (default is 100-sim mcts/default.yaml; planner is joint either way)
 python train/muzero.py train.num_episodes=50000         # override single value
 python train/muzero.py train.batch_size=128 mcts.num_simulations=50
 
@@ -113,7 +113,8 @@ configs/
     ippo.yaml             # IPPO hyperparameters
     mappo.yaml            # MAPPO hyperparameters
 actors/
-  learner_actor.py        # LearnerActor (GPU), make_train_step factory, scale_grad_half
+  learner_actor.py        # LearnerActor (GPU): training loop, param sync, checkpointing
+  loss.py                 # make_train_step factory, scale_grad_half, _awpo_weight — pure JAX, no Ray
   data_actor.py           # DataActor (CPU, num_cpus=1)
   reanalyze_actor.py      # ReanalyzeActor (CPU, num_cpus=2): re-runs MCTS to freshen targets
   replay_buffer_actor.py  # ReplayBufferActor (wraps ReplayBuffer)
@@ -129,6 +130,7 @@ model/
   layers.py               # MLP
 mcts/
   base.py                 # MCTSPlanner base class, MCTSPlanOutput
+  osla_math.py            # pure OS(λ) helpers: compute_osla_value(_jax), compute_ucb_scores, _sample_k_actions, _logits_to_joint_logits, _joint_policy_to_marginal
   mcts_joint_osla.py      # MCTSJointOSLAPlanner — custom JAX MCTS with OS(λ) per-node backup
 envs/
   __init__.py             # make_env_wrapper / make_vec_env_wrapper factory functions
@@ -168,7 +170,7 @@ tests/
 - Reward and value are **categorical distributions** over a discrete support (tz-transform). Use `utils.transforms.scalar_to_support` / `support_to_scalar` to convert. The scaling functions are `muzero_scale` / `muzero_scale_inv` (in `utils/transforms.py`).
 - `model.__call__` = initial inference; `model.recurrent_inference` = dynamics unroll (used inside MCTS simulations); `model.predict` = prediction head only, no dynamics.
 
-**Training loss** (`actors/learner_actor.py`):
+**Training loss** (`actors/loss.py`):
 - `scale_grad_half`: custom VJP — identity forward, 0.5× backward. Applied to hidden states between unroll steps to prevent dynamics gradients from dominating representation gradients (MuZero paper §E, MAZero Appendix).
 - **Multi-step SPR consistency**: for each k in `1..consistency_horizon` and each valid start position t, compare `project_online(h_t)` against `project_target(h_{t+k})` using cosine similarity. `consistency_horizon=1` reproduces original single-step loss. Higher values improve latent prediction accuracy but cost O(horizon²) projections (XLA CSE mitigates by reusing `project_online(h_t)` across k values).
 - **AWPO** (Advantage-Weighted Policy Optimization): when `awpo_alpha > 0`, policy loss at step 0 is weighted by `exp(clip((V_mcts - V_net) / alpha, -5, 5))`, normalized by batch mean. Pushes the policy toward actions the MCTS found better than the current value estimate. Disabled by default (`awpo_alpha=0.0`); set to 1.0 for SMAX.
@@ -297,7 +299,7 @@ Items marked **[easy]** are straightforward; **[medium]** require more design wo
 
 - **[done] Multi-step consistency loss (SPR)** — `consistency_horizon` param controls k-step lookahead; k=1 by default, SMAX uses 1 (can try 2-3).
 
-- **[medium] Recurrent dynamics (GRU/LSTM)** — replace or augment the MLP in `DynamicsNetwork` with a recurrent cell to handle partial observability. Requires carrying hidden state through MCTS simulations, which means passing it in the `embedding` field of `mctx.RootFnOutput`.
+- **[medium] Recurrent dynamics (GRU/LSTM)** — replace or augment the MLP in `DynamicsNetwork` with a recurrent cell to handle partial observability. Requires carrying hidden state through MCTS simulations, which means storing it in the `embedding` field of `MCTSJointOSLAPlanner`'s `OSLATree` (`mcts/mcts_joint_osla.py`) alongside the existing per-node latent.
 
 - **[medium] Data augmentation for consistency** — apply random observation noise or masking before the representation network for the online branch only. The target branch sees clean observations. Shown to improve consistency loss quality in EfficientZero.
 
@@ -309,7 +311,7 @@ Items marked **[easy]** are straightforward; **[medium]** require more design wo
 
 - **[medium] Sequential MCTS (proper implementation)** — agents search in order, each conditioning on the committed actions of prior agents. The key design question is what to put in `coordination_info`: either the prior agents' selected actions (concatenated into the latent) or a communication vector from the prior agents' MCTS trees.
 
-- **[medium] Temperature annealing** — Gumbel MuZero's `max_num_considered_actions` acts like temperature. Anneal it down over training (high early for exploration, low late for exploitation). Currently fixed at `num_gumbel_samples`.
+- **[medium] Temperature annealing** — `num_gumbel_samples` (K, the number of joint actions sampled per node in `MCTSJointOSLAPlanner`) acts like temperature. Anneal it down over training (high early for exploration, low late for exploitation). Currently fixed for the whole run.
 
 - **[medium] Factored policy targets** — for `MCTSJointOSLAPlanner`, the current marginal extraction (summing over other agents' axes) discards coordination information. An alternative: keep the full joint policy as the target and train with a factored policy head that explicitly models correlations.
 
