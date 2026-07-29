@@ -90,10 +90,7 @@ tree_util.register_pytree_node(
 )
 
 
-# ---------------------------------------------------------------------------
-# C++ backend detection (one-time import at module load).
-# Falls back silently to the pure-Python implementation if unavailable.
-# ---------------------------------------------------------------------------
+# Falls back to the pure-Python implementation if the C++ extension isn't built.
 def _try_import_cpp():
     try:
         import _replay_buffer_cpp as _cpp
@@ -104,9 +101,6 @@ def _try_import_cpp():
 _CppReplayBuffer, _CppConfig = _try_import_cpp()
 
 
-# ---------------------------------------------------------------------------
-# ReplayBuffer — thin shim that delegates to C++ when available.
-# ---------------------------------------------------------------------------
 class ReplayBuffer:
     """
     Prioritized experience replay.
@@ -170,9 +164,6 @@ class ReplayBuffer:
         self.pointer = 0
         self.size    = 0
 
-    # ------------------------------------------------------------------
-    # add()
-    # ------------------------------------------------------------------
     def add(self, item: ReplayItem, priority: float):
         if self._use_cpp:
             self._buf.add(
@@ -204,9 +195,6 @@ class ReplayBuffer:
         self.pointer = (self.pointer + 1) % self.capacity
         self.size    = min(self.size + 1, self.capacity)
 
-    # ------------------------------------------------------------------
-    # sample()
-    # ------------------------------------------------------------------
     def sample(self, batch_size: int) -> Tuple[ReplayItem, np.ndarray, np.ndarray]:
         if self._use_cpp:
             result = self._buf.sample(batch_size)
@@ -243,9 +231,6 @@ class ReplayBuffer:
         )
         return batch, weights, indices
 
-    # ------------------------------------------------------------------
-    # sample_for_reanalysis()
-    # ------------------------------------------------------------------
     def sample_for_reanalysis(self, batch_size: int):
         if self._use_cpp:
             result = self._buf.sample_for_reanalysis(batch_size)
@@ -259,9 +244,6 @@ class ReplayBuffer:
         indices = np.random.choice(self.size, min(batch_size, self.size), replace=False)
         return indices, self.observations[indices].copy(), self.agent_orders[indices].copy()
 
-    # ------------------------------------------------------------------
-    # update_targets()
-    # ------------------------------------------------------------------
     def update_targets(self, indices: np.ndarray, policy_targets: np.ndarray, root_values: np.ndarray):
         if self._use_cpp:
             self._buf.update_targets(
@@ -274,9 +256,6 @@ class ReplayBuffer:
         self.policy_targets[indices, 0] = policy_targets
         self.value_targets[indices, 0]  = root_values[:, None]
 
-    # ------------------------------------------------------------------
-    # update_priorities()
-    # ------------------------------------------------------------------
     def update_priorities(self, indices: np.ndarray, priorities: np.ndarray):
         if self._use_cpp:
             self._buf.update_priorities(
@@ -288,9 +267,6 @@ class ReplayBuffer:
         self._priorities_log[indices] = priorities
         self._ptree.update_priorities(indices, priorities)
 
-    # ------------------------------------------------------------------
-    # get_stats()
-    # ------------------------------------------------------------------
     def get_stats(self) -> dict:
         if self._use_cpp:
             return dict(self._buf.get_stats())
@@ -315,10 +291,6 @@ class ReplayBuffer:
             return len(self._buf)
         return self.size
 
-
-# ---------------------------------------------------------------------------
-# Episode processing  (pure Python / NumPy — unchanged)
-# ---------------------------------------------------------------------------
 
 def process_episode(
     episode: "Episode",
