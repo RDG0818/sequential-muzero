@@ -91,8 +91,6 @@ def test_config():
             num_simulations=8,           # minimum viable for gumbel (>= num_gumbel_samples)
             max_depth_gumbel_search=3,
             num_gumbel_samples=4,
-            dirichlet_alpha=0.3,
-            dirichlet_fraction=0.25,
             mcts_rho=0.75,
             mcts_lambda=0.8,
         ),
@@ -138,8 +136,6 @@ def test_mcts_config_has_osla_fields():
         num_simulations=8,
         max_depth_gumbel_search=3,
         num_gumbel_samples=4,
-        dirichlet_alpha=0.3,
-        dirichlet_fraction=0.25,
         mcts_rho=0.75,
         mcts_lambda=0.8,
     )
@@ -447,7 +443,7 @@ class TestUCBZeroScoreTiebreakEndToEnd:
         result = _run_single_sim(
             carry, jnp.array(0), None, fake_recurrent_fn,
             K, A_N, max_depth, gamma,
-            pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01, rho=0.25, lam=0.8,
+            rho=0.25, lam=0.8,
         )
 
         # Whichever position of node 1's children got expanded should be
@@ -794,7 +790,7 @@ class TestRootRoundRobin:
             carry = _run_single_sim(
                 carry, jnp.array(sim_idx), None, fake_recurrent_fn,
                 K, A_N, max_depth, gamma,
-                pb_c_base=19652.0, pb_c_init=1.25, value_delta_lb=0.01, rho=0.25, lam=0.8,
+                rho=0.25, lam=0.8,
             )
             # child_node_idx[0] tracks which of the K children have been
             # expanded so far; the newly-expanded one this round is the one

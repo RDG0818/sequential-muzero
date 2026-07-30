@@ -1,10 +1,5 @@
 num_simulations: 100
 max_depth_gumbel_search: 10
 num_gumbel_samples: 10
-dirichlet_alpha: 0.3
-dirichlet_fraction: 0.25
 mcts_rho: 0.25
 mcts_lambda: 0.8
-pb_c_base: 19652.0
-pb_c_init: 1.25
-value_delta_lb: 0.01

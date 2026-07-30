@@ -18,6 +18,11 @@ from mcts.osla_math import (
     _sample_k_actions,
     _logits_to_joint_logits,
     _joint_policy_to_marginal,
+    PB_C_BASE,
+    PB_C_INIT,
+    VALUE_DELTA_LB,
+    DIRICHLET_ALPHA,
+    DIRICHLET_FRACTION,
 )
 from utils.transforms import DiscreteSupport
 
@@ -96,9 +101,6 @@ def _run_single_sim(
     gamma: float,
     rho: float = 0.25,
     lam: float = 0.8,
-    pb_c_base: float = 19652.0,
-    pb_c_init: float = 1.25,
-    value_delta_lb: float = 0.01,
 ) -> SimCarry:
     """Run one MCTS simulation: selection → expansion → backup → record (depth, value)."""
     tree = carry.tree
@@ -136,7 +138,7 @@ def _run_single_sim(
         parent_visits = jnp.maximum(tree.visit_counts[node_idx].astype(jnp.float32) - 1.0, 0.0)
         ucb = compute_ucb_scores(
             child_q_baseline_diff, child_visits, prior_probs, parent_visits,
-            carry.qmin, carry.qmax, pb_c_base, pb_c_init, value_delta_lb,
+            carry.qmin, carry.qmax, PB_C_BASE, PB_C_INIT, VALUE_DELTA_LB,
         )
         # At a freshly-expanded node (parent_visits=0), UCB is all-zero for
         # every child, so bare argmax always picks index 0 regardless of
@@ -320,11 +322,6 @@ def _osla_plan_single(
     gamma: float,
     rho: float,
     lam: float,
-    pb_c_base: float,
-    pb_c_init: float,
-    value_delta_lb: float,
-    dirichlet_alpha: float,
-    dirichlet_fraction: float,
     joint_action_shape: tuple,        # static
     value_support,
     reward_support,
@@ -349,9 +346,9 @@ def _osla_plan_single(
     root_joint_logits = _logits_to_joint_logits(init_out.policy_logits[0], N)
 
     # Dirichlet noise on root prior
-    dir_noise = jax.random.dirichlet(dir_key, alpha=jnp.full(A_N, dirichlet_alpha))
+    dir_noise = jax.random.dirichlet(dir_key, alpha=jnp.full(A_N, DIRICHLET_ALPHA))
     root_probs = jax.nn.softmax(root_joint_logits)
-    noisy_probs = (1 - dirichlet_fraction) * root_probs + dirichlet_fraction * dir_noise
+    noisy_probs = (1 - DIRICHLET_FRACTION) * root_probs + DIRICHLET_FRACTION * dir_noise
     noisy_root_logits = jnp.log(noisy_probs + 1e-30)
 
     # Sample K children for root
@@ -420,7 +417,6 @@ def _osla_plan_single(
         return _run_single_sim(
             carry, sim_idx, params, recurrent_fn_batched,
             K, A_N, max_depth, gamma, rho, lam,
-            pb_c_base, pb_c_init, value_delta_lb,
         )
 
     final_carry = jax.lax.fori_loop(0, num_simulations, sim_step, init_carry)
@@ -520,16 +516,10 @@ class MCTSJointOSLAPlanner:
             max=config.model.reward_support_size,
         )
 
-        self.dirichlet_alpha = config.mcts.dirichlet_alpha
-        self.dirichlet_fraction = config.mcts.dirichlet_fraction
-
         self.joint_action_shape: tuple = (self.action_space_size,) * self.num_agents
         self.A_N = self.action_space_size ** self.num_agents
         self.mcts_rho = config.mcts.mcts_rho
         self.mcts_lambda = config.mcts.mcts_lambda
-        self.pb_c_base = config.mcts.pb_c_base
-        self.pb_c_init = config.mcts.pb_c_init
-        self.value_delta_lb = config.mcts.value_delta_lb
 
     def plan(
         self, params, rng_key: chex.Array, observation: chex.Array
@@ -555,11 +545,6 @@ class MCTSJointOSLAPlanner:
             gamma=self.discount_gamma,
             rho=self.mcts_rho,
             lam=self.mcts_lambda,
-            pb_c_base=self.pb_c_base,
-            pb_c_init=self.pb_c_init,
-            value_delta_lb=self.value_delta_lb,
-            dirichlet_alpha=self.dirichlet_alpha,
-            dirichlet_fraction=self.dirichlet_fraction,
             joint_action_shape=self.joint_action_shape,
             value_support=self.value_support,
             reward_support=self.reward_support,

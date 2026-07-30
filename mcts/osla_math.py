@@ -6,6 +6,14 @@ import chex
 import jax
 import jax.numpy as jnp
 
+# MuZero/MAZero standard values — never varied across any shipped config
+# preset, so these are constants rather than config-tunable fields.
+PB_C_BASE = 19652.0
+PB_C_INIT = 1.25
+VALUE_DELTA_LB = 0.01
+DIRICHLET_ALPHA = 0.3
+DIRICHLET_FRACTION = 0.25
+
 
 def compute_osla_value_jax(
     sim_values: chex.Array,   # [max_sims] float32 — padded with 0 after n_visits
