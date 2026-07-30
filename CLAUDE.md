@@ -104,7 +104,7 @@ envs/
   __init__.py             # make_env_wrapper / make_vec_env_wrapper factory functions
   smax_env_wrapper.py     # SMAXEnvWrapper + VecSMAXEnvWrapper (JaxMARL HeuristicEnemySMAX)
 utils/
-  transforms.py           # DiscreteSupport, scalar_to_support, support_to_scalar, muzero_scale/inv
+  transforms.py           # DiscreteSupport, scalar_to_support, support_to_scalar, muzero_scale/inv, symlog/symexp, get_value_transform_fns
   replay_buffer.py        # ReplayBuffer, ReplayItem, Episode, Transition, process_episode
   logging_utils.py        # logger singleton
   profiler.py             # Profiler class — per-operation timing for all actors
@@ -133,13 +133,14 @@ tests/
   - `DynamicsNetwork`: latent + joint action → next latent + reward logits. Optionally prepends `TransformerAttentionEncoder` for inter-agent communication during transitions.
   - `PredictionNetwork`: latent → per-agent policy logits `(B, N, A)` + centralized value logits.
   - `ProjectionNetwork`: BYOL-style EMA consistency head. Online branch applies projection + prediction MLP; target branch applies projection only using a slowly-moving EMA copy of the params (`ema_decay=0.999`, updated in `LearnerActor._train_step()` asynchronously on GPU).
-- Reward and value are **categorical distributions** over a discrete support (tz-transform). Use `utils.transforms.scalar_to_support` / `support_to_scalar` to convert. The scaling functions are `muzero_scale` / `muzero_scale_inv` (in `utils/transforms.py`).
+- Reward and value are **categorical distributions** over a discrete support (tz-transform). Use `utils.transforms.scalar_to_support` / `support_to_scalar` to convert. The scaling functions are config-selected via `ModelConfig.value_transform` (`get_value_transform_fns` in `utils/transforms.py`): `muzero_scale` / `muzero_scale_inv` (default, "hyperbolic") or `symlog` / `symexp` ("symlog", DreamerV3).
 - `model.__call__` = initial inference; `model.recurrent_inference` = dynamics unroll (used inside MCTS simulations); `model.predict` = prediction head only, no dynamics.
 
 **Training loss** (`actors/loss.py`):
 - `scale_grad_half`: custom VJP — identity forward, 0.5× backward. Applied to hidden states between unroll steps to prevent dynamics gradients from dominating representation gradients (MuZero paper §E, MAZero Appendix).
 - **Multi-step SPR consistency**: for each k in `1..consistency_horizon` and each valid start position t, compare `project_online(h_t)` against `project_target(h_{t+k})` using cosine similarity. `consistency_horizon=1` reproduces original single-step loss. Higher values improve latent prediction accuracy but cost O(horizon²) projections (XLA CSE mitigates by reusing `project_online(h_t)` across k values).
 - **AWPO** (Advantage-Weighted Policy Optimization): when `awpo_alpha > 0`, action-level — `_awpo_weight(q_k, v_net, alpha)` z-score-normalizes `Q_k - V_net` across the batch for each of the K MCTS root children, then weights by `exp(clip(., -5, 5))`; per-action weights are combined with visit-count weights and applied to each sampled joint action's log-prob, at the root and at every unroll step. Pushes the policy toward actions the MCTS found better than the current value estimate. Disabled by default (`awpo_alpha=0.0`, plain CE loss); the only shipped train preset (`configs/train/default.yaml`) sets it to `2.0` (MAZero's `awac_lambda=2`).
+- **Unimix** (`unimix_cross_entropy`): when `ModelConfig.unimix_ratio > 0`, mixes that fraction of uniform mass into the value/reward categorical prediction before the CE log — DreamerV3's 1% unimix for categoricals (Hafner et al., Nature 2025), adapted here to value/reward heads only (not policy; not the paper's critic, which DreamerV3 leaves unsmoothed). Disabled by default (`unimix_ratio=0.0`, byte-identical to plain `optax.softmax_cross_entropy`); `train/muzero.py:_build_config` validates it's in `[0.0, 1.0)` at driver startup.
 
 **MCTS planners** (`mcts/`):
 - `MCTSJointOSLAPlanner`: custom JAX MCTS with its own `RecurrentFnOutput` NamedTuple as a plain return-type container — no `mctx` dependency at all. Per-node OS(λ) backup — each node tracks per-simulation values/depths; UCB selection uses OS(λ)-estimated Q-values (top (1-rho) quantile weighted by λ^depth). Vmapped over B environments; `jax.lax.fori_loop` over simulations. Matches MAZero algorithm exactly. Public entry point: `planner.plan(params, rng_key, obs)` — the only planner — `MCTSJointOSLAPlanner` owns all of its own config extraction directly (no separate base class).

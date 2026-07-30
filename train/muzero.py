@@ -31,6 +31,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from config import ExperimentConfig, ModelConfig, MCTSConfig, TrainConfig
 from utils.logging_utils import logger
+from utils.transforms import get_value_transform_fns
 from actors import ReplayBufferActor, LearnerActor, DataActor, ReanalyzeActor
 from training import run_warmup, run_training_loop
 
@@ -66,11 +67,17 @@ def initialize_actors(obs_size: int, action_size: int, config: ExperimentConfig)
 
 def _build_config(cfg: DictConfig) -> ExperimentConfig:
     """Converts a Hydra DictConfig into a typed ExperimentConfig dataclass."""
-    return ExperimentConfig(
+    config = ExperimentConfig(
         model=ModelConfig(**OmegaConf.to_container(cfg.model, resolve=True)),
         mcts=MCTSConfig(**OmegaConf.to_container(cfg.mcts, resolve=True)),
         train=TrainConfig(**OmegaConf.to_container(cfg.train, resolve=True)),
     )
+    get_value_transform_fns(config.model.value_transform)  # raises early if unknown
+    if not 0.0 <= config.model.unimix_ratio < 1.0:
+        raise ValueError(
+            f"unimix_ratio must be in [0.0, 1.0), got {config.model.unimix_ratio}"
+        )
+    return config
 
 
 def run(cfg: DictConfig):

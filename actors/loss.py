@@ -77,12 +77,23 @@ def unimix_cross_entropy(logits: '_jax.Array', target_probs: '_jax.Array', unimi
     mixed into the predicted distribution before taking the log.
 
     unimix_ratio=0.0 is exactly optax.softmax_cross_entropy — the smoothing
-    only engages when a config opts in. Reference: DreamerV3's "1% unimix
-    for all categoricals" (Hafner et al., Nature 2025); applied here to the
-    value/reward categorical heads only, not the policy head (this repo
-    already applies Dirichlet noise to the policy at the MCTS root, which
-    covers similar ground on exploration — unimix's distinct contribution
-    here is stabilizing the value/reward heads, not policy exploration).
+    only engages when a config opts in. Reference: DreamerV3's 1% unimix for
+    categoricals (Hafner et al., Nature 2025) — adapted here to the
+    value/reward heads, which the paper's own critic does not smooth
+    (DreamerV3 applies unimix to the stochastic-latent and actor
+    categoricals; its critic uses symlog twohot without unimix). Applied
+    here to the value/reward categorical heads only, not the policy head
+    (this repo already applies Dirichlet noise to the policy at the MCTS
+    root, which covers similar ground on exploration — unimix's distinct
+    contribution here is stabilizing the value/reward heads, not policy
+    exploration).
+
+    Note: this smooths the loss target's effective comparison distribution
+    only. `support_to_scalar`'s decode is an unconditional softmax with no
+    smoothing, so a nonzero unimix_ratio introduces a small systematic bias
+    between the decoded value/reward estimate and the loss's actual
+    minimizer — worth accounting for when comparing metrics across ablation
+    arms with different unimix_ratio values.
     """
     import optax
     if unimix_ratio == 0.0:
