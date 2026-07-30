@@ -151,6 +151,8 @@ tests/
 Notable config fields added since original docs:
 - `TrainConfig.consistency_horizon: int` — SPR multi-step horizon (1 = original, default in default.yaml)
 - `TrainConfig.awpo_alpha: float` — AWPO temperature; 0.0 = disabled (default), 2.0 in the shipped SMAX preset
+- `ModelConfig.value_transform: str` — "hyperbolic" (MuZero paper default) or "symlog" (DreamerV3, Hafner et al. Nature 2025); see `utils/transforms.py`
+- `ModelConfig.unimix_ratio: float` — DreamerV3 unimix smoothing on value/reward categorical CE; 0.0 = disabled (default)
 
 ## Environment Wrappers
 
