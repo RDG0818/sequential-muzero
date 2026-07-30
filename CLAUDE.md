@@ -41,7 +41,7 @@ wandb login  # set wandb_mode to "online" in configs/train/default.yaml to enabl
 # Run training
 python train/muzero.py                                  # default config (SMAX 3m)
 python train/muzero.py model=smax mcts=joint             # SMAX 3m (primary target)
-python train/muzero.py mcts=joint                       # lighter 50-sim preset (default is 100-sim mcts/default.yaml; planner is joint either way)
+python train/muzero.py mcts=joint                       # lighter 50-sim preset (default is 100-sim mcts/default.yaml)
 python train/muzero.py train.num_episodes=50000         # override single value
 python train/muzero.py train.batch_size=128 mcts.num_simulations=50
 
@@ -85,7 +85,7 @@ configs/
     default.yaml          # SMAX 3m training hyperparameters (the only train preset)
 actors/
   learner_actor.py        # LearnerActor (GPU): training loop, param sync, checkpointing
-  loss.py                 # make_train_step factory, scale_grad_half, _awpo_weight — pure JAX, no Ray
+  loss.py                 # make_train_step/make_optimizer factories, scale_grad_half, _awpo_weight — pure JAX, no Ray
   data_actor.py           # DataActor (CPU, num_cpus=1)
   reanalyze_actor.py      # ReanalyzeActor (CPU, num_cpus=2): re-runs MCTS to freshen targets
   replay_buffer_actor.py  # ReplayBufferActor (wraps ReplayBuffer)
@@ -138,7 +138,7 @@ tests/
 **Training loss** (`actors/loss.py`):
 - `scale_grad_half`: custom VJP — identity forward, 0.5× backward. Applied to hidden states between unroll steps to prevent dynamics gradients from dominating representation gradients (MuZero paper §E, MAZero Appendix).
 - **Multi-step SPR consistency**: for each k in `1..consistency_horizon` and each valid start position t, compare `project_online(h_t)` against `project_target(h_{t+k})` using cosine similarity. `consistency_horizon=1` reproduces original single-step loss. Higher values improve latent prediction accuracy but cost O(horizon²) projections (XLA CSE mitigates by reusing `project_online(h_t)` across k values).
-- **AWPO** (Advantage-Weighted Policy Optimization): when `awpo_alpha > 0`, policy loss at step 0 is weighted by `exp(clip((V_mcts - V_net) / alpha, -5, 5))`, normalized by batch mean. Pushes the policy toward actions the MCTS found better than the current value estimate. Disabled by default (`awpo_alpha=0.0`); set to 1.0 for SMAX.
+- **AWPO** (Advantage-Weighted Policy Optimization): when `awpo_alpha > 0`, action-level — `_awpo_weight(q_k, v_net, alpha)` z-score-normalizes `Q_k - V_net` across the batch for each of the K MCTS root children, then weights by `exp(clip(., -5, 5))`; per-action weights are combined with visit-count weights and applied to each sampled joint action's log-prob, at the root and at every unroll step. Pushes the policy toward actions the MCTS found better than the current value estimate. Disabled by default (`awpo_alpha=0.0`, plain CE loss); the only shipped train preset (`configs/train/default.yaml`) sets it to `2.0` (MAZero's `awac_lambda=2`).
 
 **MCTS planners** (`mcts/`):
 - `MCTSJointOSLAPlanner`: custom JAX MCTS with its own `RecurrentFnOutput` NamedTuple as a plain return-type container — no `mctx` dependency at all. Per-node OS(λ) backup — each node tracks per-simulation values/depths; UCB selection uses OS(λ)-estimated Q-values (top (1-rho) quantile weighted by λ^depth). Vmapped over B environments; `jax.lax.fori_loop` over simulations. Matches MAZero algorithm exactly. Public entry point: `planner.plan(params, rng_key, obs)` — the only planner — `MCTSJointOSLAPlanner` owns all of its own config extraction directly (no separate base class).
@@ -149,7 +149,7 @@ tests/
 
 Notable config fields added since original docs:
 - `TrainConfig.consistency_horizon: int` — SPR multi-step horizon (1 = original, default in default.yaml)
-- `TrainConfig.awpo_alpha: float` — AWPO temperature; 0.0 = disabled (default), 1.0 for SMAX
+- `TrainConfig.awpo_alpha: float` — AWPO temperature; 0.0 = disabled (default), 2.0 in the shipped SMAX preset
 
 ## Environment Wrappers
 
@@ -163,7 +163,7 @@ SMAX-only: `env_name` is a JaxMARL SMAX scenario string (e.g. `"3m"`, `"2s3z"`, 
 - Team reward = one ally's reward (not sum), to avoid overcounting by N.
 - Episode termination uses `done["__all__"]`, not per-agent done (dead agent ≠ episode over).
 - Win detection: `done & (reward > 0.5)` (JaxMARL adds `won_battle_bonus=1.0` to terminal reward; max per-step HP damage is ~0.13, so >0.5 is a reliable win signal).
-- `VecSMAXEnvWrapper.step()` returns `(obs, states, rewards, dones, won)` — 5-tuple, unlike MPE.
+- `VecSMAXEnvWrapper.step()` returns `(obs, states, rewards, dones, won)` — 5-tuple.
 
 Any new environment wrapper must expose:
 - `reset(rng_key) → (observation, state)` where observation shape is `(1, N, obs_dim)` for single-env or `(B, N, obs_dim)` for vec
@@ -195,12 +195,12 @@ num_simulations: 100    # N; our mcts/default.yaml uses 100, joint.yaml uses 50
 sampled_action_times: 10  # K (joint actions sampled per node); our num_sampled_actions=5 for SMAX
 mcts_rho: 0.25          # keep top 75% (1 - rho) of simulations — matches our config
 mcts_lambda: 0.8        # depth discount — matches our config
-batch_size: 256         # we use 2048
-lr: 5e-4                # we use 1e-4 for SMAX
+batch_size: 256         # matches our default.yaml
+lr: 5e-4                # matches our default.yaml (constant, no decay)
 discount: 0.99
-td_steps: 5             # our n_step=5 for SMAX
-PG_type: sharp          # AWAC weights × visit counts (we simplified to awpo_alpha)
-awac_lambda: 2          # their AWPO temperature; our awpo_alpha=1.0 for SMAX
+td_steps: 5             # our n_step=5
+PG_type: sharp          # AWAC weights × visit counts — matches our action-level AWPO
+awac_lambda: 2          # their AWPO temperature; our awpo_alpha=2.0
 adv_clip: 3.0           # we clip advantage to [-5, 5] in exp() before normalizing
 ```
 

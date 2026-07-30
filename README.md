@@ -6,7 +6,7 @@ Contact: rdg291@msstate.edu
 
 ## Performance
 
-30-minute timed runs vs original MAZero on SMAC 3m (batch=256, 50 sims, 10 Gumbel samples):
+30-minute timed runs vs original MAZero on SMAC 3m (batch=256, 50 sims, 10 sampled actions):
 
 | Metric | MAZero | This repo (1 actor) | This repo (6 actors) |
 |---|---|---|---|
