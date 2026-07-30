@@ -4,7 +4,7 @@ import numpy as np
 
 import ray
 
-from actors.loss import make_train_step
+from actors.loss import make_train_step, make_optimizer
 from config import ExperimentConfig
 from utils.logging_utils import logger
 from utils.profiler import Profiler
@@ -79,22 +79,7 @@ class LearnerActor:
         self.rng_key, init_key = jax.random.split(self.rng_key)
         self.params = model.init(init_key, dummy_obs)["params"]
 
-        lr = config.train.learning_rate
-        # Clamp warmup so short diagnostic runs (num_episodes=300) don't produce
-        # a negative decay_steps and crash cosine_decay_schedule.
-        _warmup = min(config.train.lr_warmup_steps, config.train.num_episodes // 2)
-        _decay  = max(1, config.train.num_episodes - _warmup)
-        lr_schedule = optax.warmup_cosine_decay_schedule(
-            init_value=0.0,
-            peak_value=lr,
-            warmup_steps=_warmup,
-            decay_steps=_decay,
-            end_value=lr * config.train.end_lr_factor,
-        )
-        optimizer = optax.chain(
-            optax.clip_by_global_norm(config.train.gradient_clip_norm),
-            optax.adamw(learning_rate=lr_schedule),
-        )
+        optimizer, lr_schedule = make_optimizer(config)
         self.opt_state = optimizer.init(self.params)
         self.lr_schedule = lr_schedule
 

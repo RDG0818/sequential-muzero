@@ -42,6 +42,7 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
     from model import FlaxMAMuZeroNet
     from mcts import MCTSJointOSLAPlanner
     from envs import make_vec_env_wrapper
+    from actors.loss import make_optimizer
 
     # Load checkpoint.
     ckpt_dir = Path(config.train.checkpoint_dir).absolute()
@@ -58,19 +59,7 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
     rng = jax.random.PRNGKey(0)
     params = model.init(rng, dummy_obs)["params"]
 
-    import optax
-    lr = config.train.learning_rate
-    lr_schedule = optax.warmup_cosine_decay_schedule(
-        init_value=0.0,
-        peak_value=lr,
-        warmup_steps=config.train.lr_warmup_steps,
-        decay_steps=config.train.num_episodes - config.train.lr_warmup_steps,
-        end_value=lr * config.train.end_lr_factor,
-    )
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(config.train.gradient_clip_norm),
-        optax.adamw(learning_rate=lr_schedule),
-    )
+    optimizer, _ = make_optimizer(config)
     opt_state = optimizer.init(params)
     target = {
         "params": params,

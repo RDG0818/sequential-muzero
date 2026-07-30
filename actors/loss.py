@@ -7,6 +7,33 @@ import jax as _jax
 from config import ExperimentConfig
 
 
+def make_optimizer(config: ExperimentConfig):
+    """Builds the optimizer and its LR schedule from TrainConfig.
+
+    Shared by LearnerActor and eval.py so both construct an identically
+    shaped opt_state to restore checkpoints against.
+    """
+    import optax
+
+    lr = config.train.learning_rate
+    # Clamp warmup so short diagnostic runs (num_episodes=300) don't produce
+    # a negative decay_steps and crash cosine_decay_schedule.
+    warmup = min(config.train.lr_warmup_steps, config.train.num_episodes // 2)
+    decay = max(1, config.train.num_episodes - warmup)
+    lr_schedule = optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=lr,
+        warmup_steps=warmup,
+        decay_steps=decay,
+        end_value=lr * config.train.end_lr_factor,
+    )
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(config.train.gradient_clip_norm),
+        optax.adamw(learning_rate=lr_schedule),
+    )
+    return optimizer, lr_schedule
+
+
 @_jax.custom_vjp
 def scale_grad_half(x):
     """Identity in forward pass; halves gradients in backward pass.
