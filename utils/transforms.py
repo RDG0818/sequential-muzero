@@ -25,14 +25,8 @@ def muzero_scale_inv(x: jnp.ndarray, epsilon: float = 1e-3) -> jnp.ndarray:
 
 
 def symlog(x: jnp.ndarray) -> jnp.ndarray:
-    """
-    DreamerV3 value/reward transform — alternative to muzero_scale.
-
-    symlog(x) = sign(x) * ln(|x| + 1). Same role as muzero_scale (compress
-    large magnitudes before feeding a categorical support), different curve.
-    Reference: Hafner et al., "Mastering Diverse Domains through World
-    Models," Nature 2025 (arXiv:2301.04104).
-    """
+    """DreamerV3 value/reward transform — alternative to muzero_scale, same
+    role, different curve. Hafner et al., Nature 2025 (arXiv:2301.04104)."""
     return jnp.sign(x) * jnp.log1p(jnp.abs(x))
 
 
@@ -60,14 +54,9 @@ _VALUE_TRANSFORMS = {
 
 
 def get_value_transform_fns(name: str) -> Tuple[Callable, Callable]:
-    """
-    Selects the (scale_fn, inv_scale_fn) pair for a DiscreteSupport by name.
-
-    "hyperbolic" is the original MuZero paper's transform (Pohlen et al.
-    2018, the repo default). "symlog" is DreamerV3's transform (see symlog
-    docstring) — same role, different curve, opt-in via
-    ModelConfig.value_transform.
-    """
+    """(scale_fn, inv_scale_fn) for a DiscreteSupport by name: "hyperbolic"
+    (MuZero paper, Pohlen et al. 2018, default) or "symlog" (see symlog()).
+    Opt-in via ModelConfig.value_transform."""
     try:
         return _VALUE_TRANSFORMS[name]
     except KeyError:
@@ -78,19 +67,8 @@ def get_value_transform_fns(name: str) -> Tuple[Callable, Callable]:
 
 
 def scalar_to_support(scalar: jnp.ndarray, support: DiscreteSupport) -> jnp.ndarray:
-    """
-    Encodes a scalar value into a two-hot categorical distribution over the support.
-
-    Applies support.scale_fn first, then distributes probability mass between
-    the two nearest support atoms via linear interpolation.
-
-    Args:
-        scalar: Scalar values to encode. Any shape.
-        support: DiscreteSupport defining the range and scale transform.
-
-    Returns:
-        Categorical distribution. Shape: (*scalar.shape, support.size)
-    """
+    """Two-hot encodes a scalar over support: support.scale_fn, then linear
+    interpolation between the two nearest atoms. Shape (*scalar.shape, support.size)."""
     scaled_scalar = support.scale_fn(scalar)
     clipped_scalar = jnp.clip(scaled_scalar, support.min, support.max)
 
@@ -108,20 +86,8 @@ def scalar_to_support(scalar: jnp.ndarray, support: DiscreteSupport) -> jnp.ndar
 
 
 def support_to_scalar(distribution: jnp.ndarray, support: DiscreteSupport) -> jnp.ndarray:
-    """
-    Decodes a categorical distribution (or logits) back to a scalar value.
-
-    Applies softmax to convert logits to probabilities, computes the expected
-    value over the support atoms, then inverts via support.inv_scale_fn.
-
-    Args:
-        distribution: Logits or probabilities over the support.
-                      Shape: (*batch_shape, support.size)
-        support: DiscreteSupport defining the range and scale transform.
-
-    Returns:
-        Scalar values. Shape: (*batch_shape,)
-    """
+    """Decodes logits (or probabilities) over support to a scalar: softmax,
+    expected value over the support atoms, then support.inv_scale_fn."""
     probs = jax.nn.softmax(distribution, axis=-1)
     support_range = jnp.arange(support.min, support.max + 1, dtype=jnp.float32)
     scalar = jnp.sum(probs * jnp.broadcast_to(support_range, probs.shape), axis=-1)
