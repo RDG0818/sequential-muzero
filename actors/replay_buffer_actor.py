@@ -34,7 +34,6 @@ class ReplayBufferActor:
         self._q_actions = np.zeros((cap, U + 1, K, N), dtype=np.int32)
         self._q_values  = np.zeros((cap, U + 1, K),    dtype=np.float32)
         self._q_visits  = np.zeros((cap, U + 1, K),    dtype=np.float32)
-        self._q_valid   = np.zeros((cap, U + 1),       dtype=bool)
         self._capacity  = cap
         self._add_counter = 0
 
@@ -45,7 +44,6 @@ class ReplayBufferActor:
             self._q_actions[slot] = item.all_child_actions  # (U+1, K, N)
             self._q_values[slot]  = item.all_child_q        # (U+1, K)
             self._q_visits[slot]  = item.all_child_visits   # (U+1, K)
-            self._q_valid[slot]   = item.all_child_valid    # (U+1,) bool
             self._add_counter += 1
 
     def sample(self, batch_size: int):
@@ -54,12 +52,10 @@ class ReplayBufferActor:
             return None, None, None, None
         batch, weights, indices = result
         # Attach sidecar Q-data for the sampled indices.
-        # Items that were added before the sidecar was active have q_valid=False.
         q_data = {
             "all_child_actions": self._q_actions[indices],  # (B, U+1, K, N)
             "all_child_q":       self._q_values[indices],   # (B, U+1, K)
             "all_child_visits":  self._q_visits[indices],   # (B, U+1, K)
-            "all_child_valid":   self._q_valid[indices],    # (B, U+1) bool
         }
         return batch, weights, indices, q_data
 
@@ -74,7 +70,6 @@ class ReplayBufferActor:
         self._q_actions[indices, 0] = child_actions  # (B, K, N)
         self._q_values[indices, 0]  = child_q        # (B, K)
         self._q_visits[indices, 0]  = child_visits   # (B, K)
-        self._q_valid[indices, 0]   = True
 
     def update_priorities(self, indices: np.ndarray, priorities: np.ndarray):
         self.buffer.update_priorities(indices, priorities)

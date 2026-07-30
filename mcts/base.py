@@ -19,6 +19,6 @@ class MCTSPlanOutput(NamedTuple):
     joint_action:       chex.Array
     policy_targets:     chex.Array
     root_value:         chex.Array
-    root_child_actions: chex.Array = None
-    root_child_q:       chex.Array = None
-    root_child_visits:  chex.Array = None
+    root_child_actions: chex.Array
+    root_child_q:       chex.Array
+    root_child_visits:  chex.Array

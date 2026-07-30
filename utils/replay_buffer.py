@@ -58,7 +58,6 @@ class ReplayItem:
     all_child_actions: np.ndarray  # (U+1, K, N) int32
     all_child_q: np.ndarray  # (U+1, K) float32
     all_child_visits: np.ndarray  # (U+1, K) float32
-    all_child_valid: np.ndarray  # (U+1,) bool
 
 
 def flatten_replay_item(item: ReplayItem):
@@ -84,7 +83,6 @@ def unflatten_replay_item(static_data, children):
         all_child_actions=None,
         all_child_q=None,
         all_child_visits=None,
-        all_child_valid=None,
     )
 
 
@@ -169,7 +167,6 @@ class ReplayBuffer:
             all_child_actions=None,
             all_child_q=None,
             all_child_visits=None,
-            all_child_valid=None,
         )
         return batch, weights, indices
 
@@ -279,7 +276,6 @@ def process_episode(
         all_child_visits = np.stack(
             [trajectory[start + i].root_child_visits for i in range(unroll_steps + 1)]
         )  # (U+1, K)
-        all_child_valid = np.ones(unroll_steps + 1, dtype=bool)
 
         replay_items.append(
             ReplayItem(
@@ -291,7 +287,6 @@ def process_episode(
                 all_child_actions=all_child_actions,
                 all_child_q=all_child_q,
                 all_child_visits=all_child_visits,
-                all_child_valid=all_child_valid,
             )
         )
 

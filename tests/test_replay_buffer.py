@@ -56,7 +56,6 @@ def make_item(rng=None):
         all_child_actions = rng.integers(0, A, (U+1, K, N), dtype=np.int32),
         all_child_q        = rng.random((U+1, K), dtype=np.float32),
         all_child_visits   = rng.random((U+1, K), dtype=np.float32),
-        all_child_valid    = np.ones(U+1, dtype=bool),
     )
 
 
@@ -272,12 +271,10 @@ def test_replay_item_all_child_fields_exist():
         all_child_actions=np.zeros((6, 10, 3), dtype=np.int32),
         all_child_q=np.zeros((6, 10)),
         all_child_visits=np.zeros((6, 10)),
-        all_child_valid=np.ones(6, dtype=bool),
     )
     assert item.all_child_actions.shape == (6, 10, 3)
     assert item.all_child_q.shape == (6, 10)
     assert item.all_child_visits.shape == (6, 10)
-    assert item.all_child_valid.shape == (6,)
 
 
 def test_process_episode_all_child_q_shape():
@@ -303,8 +300,6 @@ def test_process_episode_all_child_q_shape():
     assert it.all_child_q.shape == (U_ + 1, K_)
     assert it.all_child_actions.shape == (U_ + 1, K_, N_)
     assert it.all_child_visits.shape == (U_ + 1, K_)
-    assert it.all_child_valid.shape == (U_ + 1,)
-    assert it.all_child_valid.all(), "all positions should be valid since ep_len > U"
 
 
 def test_process_episode_never_indexes_past_episode_end():

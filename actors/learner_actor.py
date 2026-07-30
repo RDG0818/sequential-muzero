@@ -172,7 +172,7 @@ class LearnerActor:
             jax.block_until_ready((jax_batch, jax_weights))
 
         with self.profiler.time("train_step"):
-            # Convert q_data to JAX arrays for device; q_valid mask gates AWPO.
+            # Convert q_data to JAX arrays for device.
             jax_q_data = {
                 k: jax.device_put(np.asarray(v)) for k, v in q_data.items()
             }

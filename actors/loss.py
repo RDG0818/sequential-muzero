@@ -93,8 +93,6 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
     # Clamp horizon to U so range(U+1-k) is always ≥ 1.
     consistency_horizon = min(int(config.train.consistency_horizon), U)
     awpo_alpha = float(config.train.awpo_alpha)  # 0.0 = disabled
-    K = config.mcts.num_sampled_actions  # static: K sampled joint actions per MCTS node
-    N = config.train.num_agents          # static: number of agents
 
     def train_step(params, opt_state, batch, weights, rng_key, ema_params, q_data):
         # Pre-compute categorical support targets outside loss_fn so they
@@ -121,15 +119,11 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                 init_out.value_logits, value_target_dist[:, 0]
             )
 
-            # AWPO root policy loss (paper Eq. 10, 14); no-op mean CE when
-            # awpo_alpha=0 (branch eliminated at JIT trace time).
-            ce_p0 = optax.softmax_cross_entropy(
-                init_out.policy_logits, batch.policy_target[:, 0]
-            ).mean(axis=-1)  # (B,)
+            # AWPO root policy loss (paper Eq. 10, 14); branch eliminated at
+            # JIT trace time based on awpo_alpha.
             if awpo_alpha > 0.0:
                 # Action-level AWPO: weight each sampled root action by
                 # exp((Q_k - V_net) / alpha), batch-normalized (_awpo_weight).
-                q_valid       = q_data["all_child_valid"][:, 0]      # (B,) bool — root position
                 q_k           = q_data["all_child_q"][:, 0]          # (B, K)
                 visits_k      = q_data["all_child_visits"][:, 0]     # (B, K)
                 child_actions = q_data["all_child_actions"][:, 0]    # (B, K, N)
@@ -156,13 +150,11 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
 
                 # Visit-count-weighted AWPO loss
                 visit_weights = visits_k / (visits_k.sum(axis=-1, keepdims=True) + 1e-8)
-                action_awpo_loss = -(visit_weights * awpo_w_k * joint_log_prob_k).sum(axis=-1)  # (B,)
-
-                # q_valid masks cold ring-buffer slots that predate this item's
-                # Q-data being written (not a "missing planner" case — the
-                # sole planner always produces Q-data).
-                p0_loss = jnp.where(q_valid, action_awpo_loss, ce_p0)  # (B,)
+                p0_loss = -(visit_weights * awpo_w_k * joint_log_prob_k).sum(axis=-1)  # (B,)
             else:
+                ce_p0 = optax.softmax_cross_entropy(
+                    init_out.policy_logits, batch.policy_target[:, 0]
+                ).mean(axis=-1)  # (B,)
                 p0_loss = ce_p0  # (B,)
 
             # ---- Steps 1..U: unroll via scan ----
@@ -173,7 +165,6 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                 step_q_acts  = jnp.moveaxis(q_data["all_child_actions"][:, 1:], 1, 0)  # (U, B, K, N)
                 step_q_q     = jnp.moveaxis(q_data["all_child_q"][:, 1:],       1, 0)  # (U, B, K)
                 step_q_vis   = jnp.moveaxis(q_data["all_child_visits"][:, 1:],  1, 0)  # (U, B, K)
-                step_q_valid = jnp.moveaxis(q_data["all_child_valid"][:, 1:],   1, 0)  # (U, B)
 
                 xs = (
                     jnp.moveaxis(batch.actions, 1, 0),
@@ -184,11 +175,10 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                     step_q_acts,
                     step_q_q,
                     step_q_vis,
-                    step_q_valid,
                 )
 
                 def scan_step(hidden, inputs):
-                    ai, ri_dist, pi_target, vi_dist, step_key, qd_acts, qd_q, qd_vis, qd_valid = inputs
+                    ai, ri_dist, pi_target, vi_dist, step_key, qd_acts, qd_q, qd_vis = inputs
                     hidden = scale_grad_half(hidden)
                     out = model.apply(
                         {"params": p}, hidden, ai,
@@ -200,9 +190,6 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                     vi_loss = optax.softmax_cross_entropy(out.value_logits, vi_dist)
 
                     # AWPO at this unroll step (mirrors root step computation)
-                    ce_loss = optax.softmax_cross_entropy(
-                        out.policy_logits, pi_target
-                    ).mean(axis=-1)  # (B,) fallback
                     v_net_step = support_to_scalar(out.value_logits, value_support)  # (B,)
                     awpo_w = _awpo_weight(qd_q, v_net_step, awpo_alpha)  # (B, K)
                     B_ = qd_q.shape[0]
@@ -216,8 +203,7 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                     ).squeeze(-1)                                                    # (B, K, N)
                     jlp_k = gathered.sum(axis=-1)                                   # (B, K)
                     vis_w = qd_vis / (qd_vis.sum(axis=-1, keepdims=True) + 1e-8)   # (B, K)
-                    awpo_loss = -(vis_w * awpo_w * jlp_k).sum(axis=-1)             # (B,)
-                    pi_loss = jnp.where(qd_valid, awpo_loss, ce_loss)              # (B,)
+                    pi_loss = -(vis_w * awpo_w * jlp_k).sum(axis=-1)               # (B,)
 
                     return next_hidden, (ri_loss, pi_loss, vi_loss, next_hidden)
 
