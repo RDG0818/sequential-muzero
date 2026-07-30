@@ -41,7 +41,7 @@ Return is sum of negative distances to landmarks per step; closer to 0 is better
 
 **Prioritized replay buffer** (`utils/replay_buffer.py`): backed by `cpprb.PrioritizedReplayBuffer` — stratified PER sampling with alpha/beta annealing, uniform (without-replacement) sampling for reanalysis.
 
-**OS(λ) MCTS** (`mcts/mcts_joint_osla.py`): custom JAX implementation of the MAZero planner. Per-node OS(λ) backup — each node tracks per-simulation values and depths; UCB selection uses quantile-weighted Q-estimates. Vmapped over batch; `jax.lax.fori_loop` over simulations. No mctx dependency for this planner.
+**OS(λ) MCTS** (`mcts/mcts_joint_osla.py`): custom JAX implementation of the MAZero planner. Per-node OS(λ) backup — each node tracks per-simulation values and depths; UCB selection uses quantile-weighted Q-estimates. Vmapped over batch; `jax.lax.fori_loop` over simulations. No mctx dependency anywhere in this repo.
 
 **JAX + Ray constraint**: JAX eagerly allocates the entire GPU; Ray spawns isolated processes. All JAX imports must be inside actor `__init__` / methods — never at module top-level. The replay buffer converts everything to NumPy before storage to prevent DeviceArrays crossing process boundaries. Violating this causes SEGFAULTs.
 

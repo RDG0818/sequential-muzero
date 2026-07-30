@@ -2,7 +2,6 @@ jaxmarl
 jax
 flax
 chex
-mctx
 ray
 wandb
 pytest

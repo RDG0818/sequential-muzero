@@ -1,11 +1,11 @@
 # mcts/mcts_joint_osla.py
 
 import functools
+from typing import NamedTuple
 
 import chex
 import jax
 import jax.numpy as jnp
-import mctx
 
 from model import FlaxMAMuZeroNet
 import utils.transforms as utils
@@ -19,6 +19,17 @@ from mcts.osla_math import (
     _logits_to_joint_logits,
     _joint_policy_to_marginal,
 )
+
+
+# ─── Local replacement for mctx.RecurrentFnOutput ───────────────────────────
+
+class RecurrentFnOutput(NamedTuple):
+    """Local replacement for mctx.RecurrentFnOutput — a plain container for
+    the dynamics-network rollout output, no dependency on mctx's search."""
+    reward: chex.Array
+    discount: chex.Array
+    prior_logits: chex.Array
+    value: chex.Array
 
 
 # ─── Tree data structure ──────────────────────────────────────────────────────
@@ -388,7 +399,7 @@ def _osla_plan_single(
             lambda lg: _logits_to_joint_logits(lg, N)
         )(out.policy_logits)
         return (
-            mctx.RecurrentFnOutput(
+            RecurrentFnOutput(
                 reward=reward,
                 discount=jnp.full_like(reward, gamma),
                 prior_logits=joint_logits,
@@ -478,9 +489,10 @@ class MCTSJointOSLAPlanner(MCTSPlanner):
     """
     Joint MCTS with OS(λ) backup.
 
-    Uses a custom JAX MCTS loop (not mctx) with PUCT selection,
-    K sampled joint actions per node, and OS(λ) value aggregation.
-    Selected via planner_mode="joint" (the default and only planner).
+    Uses a custom JAX MCTS loop (own RecurrentFnOutput NamedTuple, no mctx
+    dependency) with PUCT selection, K sampled joint actions per node, and
+    OS(λ) value aggregation. Selected via planner_mode="joint" (the default and
+    only planner).
     """
 
     def __init__(self, model: FlaxMAMuZeroNet, config: ExperimentConfig):

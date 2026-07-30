@@ -160,7 +160,7 @@ tests/
 
 **MCTS planners** (`mcts/`):
 - `MCTSPlanner` (base): common config, `DiscreteSupport` objects, Dirichlet noise. Public entry point: `planner.plan(params, rng_key, obs)`.
-- `MCTSJointOSLAPlanner` (`joint`, the only planner, default everywhere): custom JAX MCTS (not mctx's search — `mctx.RecurrentFnOutput` is reused as a plain return-type container). Per-node OS(λ) backup — each node tracks per-simulation values/depths; UCB selection uses OS(λ)-estimated Q-values (top (1-rho) quantile weighted by λ^depth). Vmapped over B environments; `jax.lax.fori_loop` over simulations. Matches MAZero algorithm exactly.
+- `MCTSJointOSLAPlanner` (the only planner, default everywhere): custom JAX MCTS with its own `RecurrentFnOutput` NamedTuple as a plain return-type container — no `mctx` dependency at all. Per-node OS(λ) backup — each node tracks per-simulation values/depths; UCB selection uses OS(λ)-estimated Q-values (top (1-rho) quantile weighted by λ^depth). Vmapped over B environments; `jax.lax.fori_loop` over simulations. Matches MAZero algorithm exactly.
 
 **Data flow**: `observation (B,N,obs_dim)` → [obs normalization] → representation → latent `(B,N,D)` → MCTS (calls `recurrent_inference` inside simulations) → `MCTSPlanOutput` → `Transition` → `Episode` → `process_episode` (n-step returns) → `ReplayItem` → `ReplayBuffer`.
 

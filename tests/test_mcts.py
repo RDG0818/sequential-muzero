@@ -397,8 +397,7 @@ class TestUCBZeroScoreTiebreakEndToEnd:
         test_all_zero_ucb_when_parent_visits_zero_and_children_unvisited.
         Node 1's own children have a skewed prior favoring index 3; the
         tie-break must expand index 3, not always index 0."""
-        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry
-        import mctx
+        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry, RecurrentFnOutput
 
         K, A_N, N, D, max_depth, gamma = 4, 25, 2, 8, 3, 0.99
         max_nodes = K + 2
@@ -406,7 +405,7 @@ class TestUCBZeroScoreTiebreakEndToEnd:
         def fake_recurrent_fn(params, rng, flat_action, embedding):
             B = flat_action.shape[0]
             return (
-                mctx.RecurrentFnOutput(
+                RecurrentFnOutput(
                     reward=jnp.zeros((B,)),
                     discount=jnp.ones((B,)),
                     prior_logits=jnp.zeros((B, A_N)),
@@ -560,11 +559,11 @@ class TestRunSingleSimBackup:
 
     def _make_fake_recurrent_fn(self, fixed_reward: float, fixed_value: float, A_N: int, N: int, D: int):
         """Returns a recurrent_fn that always outputs fixed reward and value."""
-        import mctx
+        from mcts.mcts_joint_osla import RecurrentFnOutput
         def fake_recurrent_fn(params, rng, flat_action, embedding):
             B = flat_action.shape[0]
             return (
-                mctx.RecurrentFnOutput(
+                RecurrentFnOutput(
                     reward=jnp.full((B,), fixed_reward),
                     discount=jnp.ones((B,)),
                     prior_logits=jnp.zeros((B, A_N)),
@@ -758,9 +757,8 @@ class TestRootRoundRobin:
         child_index = node->visit_count - 1;` — the first K simulations must
         round-robin through the K sampled root actions before UCB selection
         kicks in, regardless of prior/value differences between them."""
-        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry
+        from mcts.mcts_joint_osla import _run_single_sim, OSLATree, SimCarry, RecurrentFnOutput
         from mcts.osla_math import _sample_k_actions
-        import mctx
 
         K, A_N, N, D, max_depth, gamma = 4, 25, 2, 8, 3, 0.99
 
@@ -789,7 +787,7 @@ class TestRootRoundRobin:
         def fake_recurrent_fn(params, rng, flat_action, embedding):
             B = flat_action.shape[0]
             return (
-                mctx.RecurrentFnOutput(
+                RecurrentFnOutput(
                     reward=jnp.zeros((B,)),
                     discount=jnp.ones((B,)),
                     prior_logits=jnp.zeros((B, A_N)),
