@@ -90,7 +90,6 @@ def test_config():
             use_obs_normalization=False,
         ),
         mcts=MCTSConfig(
-            planner_mode="joint",
             num_simulations=8,           # minimum viable for gumbel (>= num_gumbel_samples)
             max_depth_gumbel_search=3,
             num_gumbel_samples=4,
@@ -138,7 +137,6 @@ def obs():
 def test_mcts_config_has_osla_fields():
     from config import MCTSConfig
     cfg = MCTSConfig(
-        planner_mode="joint",
         num_simulations=8,
         max_depth_gumbel_search=3,
         num_gumbel_samples=4,
@@ -678,15 +676,6 @@ class TestMCTSJointOSLAPlanner:
         results = [plan_fn(params, jax.random.PRNGKey(i), obs).joint_action for i in range(10)]
         all_same = all(jnp.array_equal(results[0], r) for r in results[1:])
         assert not all_same
-
-def test_reanalyze_actor_uses_osla_planner():
-    """ReanalyzeActor's planner_map must map 'joint' to MCTSJointOSLAPlanner."""
-    import pathlib
-    src = (pathlib.Path(__file__).parent.parent / "actors" / "reanalyze_actor.py").read_text()
-    assert '"joint": MCTSJointOSLAPlanner' in src, (
-        "ReanalyzeActor planner_map must map 'joint' to MCTSJointOSLAPlanner"
-    )
-
 
 class TestComputeOslaValueJax:
 

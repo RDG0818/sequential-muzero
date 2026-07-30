@@ -29,7 +29,6 @@ class ModelConfig:
 @dataclass(frozen=True)
 class MCTSConfig:
     """Hyperparameters for the MCTS planner."""
-    planner_mode: str
     num_simulations: int
     max_depth_gumbel_search: int
     num_gumbel_samples: int

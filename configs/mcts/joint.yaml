@@ -1,7 +1,6 @@
 defaults:
   - default
 
-planner_mode: joint
 num_simulations: 50     # MAZero uses 50 for SMAC; halves MCTS cost vs default 100
 mcts_rho: 0.25          # MAZero paper value: keep top 75% of sims
 num_gumbel_samples: 5   # MAZero uses 5 sampled joint actions per node (default 10)

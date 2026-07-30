@@ -94,13 +94,7 @@ class DataActor:
         )
 
         model = FlaxMAMuZeroNet(config.model, action_size)
-        planner_map = {"joint": MCTSJointOSLAPlanner}
-        if config.mcts.planner_mode not in planner_map:
-            raise ValueError(
-                f"Unknown planner_mode '{config.mcts.planner_mode}'. "
-                f"Choose from: {list(planner_map)}"
-            )
-        planner = planner_map[config.mcts.planner_mode](model=model, config=config)
+        planner = MCTSJointOSLAPlanner(model=model, config=config)
 
         # Single JIT boundary: DataActor owns compilation of the plan function.
         self.plan_fn = jax.jit(planner.plan)

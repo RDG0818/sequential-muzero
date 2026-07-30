@@ -22,7 +22,6 @@ Key config group files:
 - `configs/train/smax_3m.yaml` — episode/buffer/actor counts; sets `awpo_alpha=1.0`, `n_step=5`
 - `configs/model/smax.yaml` — 2-layer [128,128] nets, 3-layer 8-head attention, value support [-5,5]
 - `configs/mcts/joint.yaml` — MCTSJointOSLAPlanner, 50 sims, rho=0.25, K=5
-- `configs/mcts/smax.yaml` — same as joint but 100 sims (closer to paper; noisier policy targets at 50)
 
 Resource layout on the 12-core machine:
 - 3 DataActors × 1 CPU (`@ray.remote(num_cpus=1)`, `OMP_NUM_THREADS=2`) = 3 CPUs claimed by Ray
@@ -88,7 +87,6 @@ configs/
   mcts/
     default.yaml          # MCTS hyperparameters (base defaults; joint planner)
     joint.yaml            # joint planner preset (50 sims, rho=0.25, K=5)
-    smax.yaml             # SMAX MCTS preset (100 sims; paper value)
   train/
     default.yaml          # training hyperparameters (MPE defaults)
     smax_3m.yaml          # SMAX 3m overrides: lr=1e-4, n_step=5, awpo_alpha=1.0, buf=500k
@@ -112,7 +110,7 @@ model/
   attention.py            # TransformerAttentionEncoder
   layers.py               # MLP
 mcts/
-  base.py                 # MCTSPlanner base class, MCTSPlanOutput
+  base.py                 # MCTSPlanOutput NamedTuple (planner's return type)
   osla_math.py            # pure OS(λ) helpers: compute_osla_value(_jax), compute_ucb_scores, _sample_k_actions, _logits_to_joint_logits, _joint_policy_to_marginal
   mcts_joint_osla.py      # MCTSJointOSLAPlanner — custom JAX MCTS with OS(λ) per-node backup
 envs/
@@ -159,8 +157,7 @@ tests/
 - **AWPO** (Advantage-Weighted Policy Optimization): when `awpo_alpha > 0`, policy loss at step 0 is weighted by `exp(clip((V_mcts - V_net) / alpha, -5, 5))`, normalized by batch mean. Pushes the policy toward actions the MCTS found better than the current value estimate. Disabled by default (`awpo_alpha=0.0`); set to 1.0 for SMAX.
 
 **MCTS planners** (`mcts/`):
-- `MCTSPlanner` (base): common config, `DiscreteSupport` objects, Dirichlet noise. Public entry point: `planner.plan(params, rng_key, obs)`.
-- `MCTSJointOSLAPlanner` (the only planner, default everywhere): custom JAX MCTS with its own `RecurrentFnOutput` NamedTuple as a plain return-type container — no `mctx` dependency at all. Per-node OS(λ) backup — each node tracks per-simulation values/depths; UCB selection uses OS(λ)-estimated Q-values (top (1-rho) quantile weighted by λ^depth). Vmapped over B environments; `jax.lax.fori_loop` over simulations. Matches MAZero algorithm exactly.
+- `MCTSJointOSLAPlanner`: custom JAX MCTS with its own `RecurrentFnOutput` NamedTuple as a plain return-type container — no `mctx` dependency at all. Per-node OS(λ) backup — each node tracks per-simulation values/depths; UCB selection uses OS(λ)-estimated Q-values (top (1-rho) quantile weighted by λ^depth). Vmapped over B environments; `jax.lax.fori_loop` over simulations. Matches MAZero algorithm exactly. Public entry point: `planner.plan(params, rng_key, obs)` — the only planner — `MCTSJointOSLAPlanner` owns all of its own config extraction directly (no separate base class).
 
 **Data flow**: `observation (B,N,obs_dim)` → [obs normalization] → representation → latent `(B,N,D)` → MCTS (calls `recurrent_inference` inside simulations) → `MCTSPlanOutput` → `Transition` → `Episode` → `process_episode` (n-step returns) → `ReplayItem` → `ReplayBuffer`.
 
@@ -230,7 +227,7 @@ The paper codebase this repo is partially based on. Key facts for understanding 
 ### Paper Hyperparameters (from `train_smac.sh`)
 
 ```
-num_simulations: 100    # N; our smax.yaml uses 100, joint.yaml uses 50
+num_simulations: 100    # N; our mcts/default.yaml uses 100, joint.yaml uses 50
 sampled_action_times: 10  # K (joint actions sampled per node); our num_gumbel_samples=5 for SMAX
 mcts_rho: 0.25          # keep top 75% (1 - rho) of simulations — matches our config
 mcts_lambda: 0.8        # depth discount — matches our config

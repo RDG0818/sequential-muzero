@@ -84,8 +84,7 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
     params = restored["params"]
     step = int(restored["step"])
 
-    planner_map = {"joint": MCTSJointOSLAPlanner}
-    planner = planner_map[config.mcts.planner_mode](model=model, config=config)
+    planner = MCTSJointOSLAPlanner(model=model, config=config)
     plan_fn = jax.jit(planner.plan)
 
     B = config.train.num_envs_per_actor

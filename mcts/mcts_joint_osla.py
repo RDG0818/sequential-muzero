@@ -10,7 +10,7 @@ import jax.numpy as jnp
 from model import FlaxMAMuZeroNet
 import utils.transforms as utils
 from config import ExperimentConfig
-from mcts.base import MCTSPlanner, MCTSPlanOutput
+from mcts.base import MCTSPlanOutput
 from mcts.osla_math import (
     compute_osla_value_jax,
     compute_osla_value,
@@ -19,6 +19,7 @@ from mcts.osla_math import (
     _logits_to_joint_logits,
     _joint_policy_to_marginal,
 )
+from utils.transforms import DiscreteSupport
 
 
 # ─── Local replacement for mctx.RecurrentFnOutput ───────────────────────────
@@ -334,6 +335,11 @@ def _osla_plan_single(
     N = observation.shape[0]
 
     # ── Root inference ────────────────────────────────────────────────────────
+    # No `deterministic=True` here: FlaxMAMuZeroNet.__call__ (initial inference)
+    # only runs RepresentationNetwork + PredictionNetwork, neither of which uses
+    # dropout (and __call__ doesn't accept a `deterministic` kwarg). Dropout only
+    # lives in DynamicsNetwork's attention module, exercised via
+    # recurrent_inference below — that's the call site that needed the fix.
     obs_batched = observation[None]  # [1, N, obs_size]
     init_out = model.apply(
         {"params": params}, obs_batched, rngs={"dropout": init_key}
@@ -391,6 +397,7 @@ def _osla_plan_single(
             per_agent,
             method=model.recurrent_inference,
             rngs={"dropout": rng_key},
+            deterministic=True,
         )
         value = utils.support_to_scalar(out.value_logits, value_support)
         reward = utils.support_to_scalar(out.reward_logits, reward_support)
@@ -485,18 +492,37 @@ def _osla_plan_single(
 
 # ─── Planner class ────────────────────────────────────────────────────────────
 
-class MCTSJointOSLAPlanner(MCTSPlanner):
+class MCTSJointOSLAPlanner:
     """
     Joint MCTS with OS(λ) backup.
 
     Uses a custom JAX MCTS loop (own RecurrentFnOutput NamedTuple, no mctx
     dependency) with PUCT selection, K sampled joint actions per node, and
-    OS(λ) value aggregation. Selected via planner_mode="joint" (the default and
-    only planner).
+    OS(λ) value aggregation. The only planner in this codebase.
     """
 
     def __init__(self, model: FlaxMAMuZeroNet, config: ExperimentConfig):
-        super().__init__(model, config)
+        self.model = model
+        self.num_agents = config.train.num_agents
+        self.action_space_size = model.action_space_size
+
+        self.num_simulations = config.mcts.num_simulations
+        self.max_depth_gumbel_search = config.mcts.max_depth_gumbel_search
+        self.num_gumbel_samples = config.mcts.num_gumbel_samples
+        self.discount_gamma = config.train.discount_gamma
+
+        self.value_support = DiscreteSupport(
+            min=-config.model.value_support_size,
+            max=config.model.value_support_size,
+        )
+        self.reward_support = DiscreteSupport(
+            min=-config.model.reward_support_size,
+            max=config.model.reward_support_size,
+        )
+
+        self.dirichlet_alpha = config.mcts.dirichlet_alpha
+        self.dirichlet_fraction = config.mcts.dirichlet_fraction
+
         self.joint_action_shape: tuple = (self.action_space_size,) * self.num_agents
         self.A_N = self.action_space_size ** self.num_agents
         self.mcts_rho = config.mcts.mcts_rho
@@ -504,11 +530,13 @@ class MCTSJointOSLAPlanner(MCTSPlanner):
         self.pb_c_base = config.mcts.pb_c_base
         self.pb_c_init = config.mcts.pb_c_init
         self.value_delta_lb = config.mcts.value_delta_lb
-        # Override: don't JIT recurrent_fn standalone (it's called inside _osla_plan_single)
-        self._recurrent_fn_jit = None
 
-    def _recurrent_fn(self, params, rng_key, action, embedding):
-        raise NotImplementedError("MCTSJointOSLAPlanner uses recurrent_fn internally in _osla_plan_single.")
+    def plan(
+        self, params, rng_key: chex.Array, observation: chex.Array
+    ) -> MCTSPlanOutput:
+        """Public entry point. JIT compilation is the caller's responsibility
+        (DataActor wraps this with jax.jit at construction time)."""
+        return self._plan_loop(params, rng_key, observation)
 
     def _plan_loop(
         self, params, rng_key: chex.Array, observation: chex.Array

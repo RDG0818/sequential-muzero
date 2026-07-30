@@ -79,13 +79,7 @@ class ReanalyzeActor:
         self.rng_key = jax.random.PRNGKey(actor_id * 2718 + 42)
 
         model = FlaxMAMuZeroNet(config.model, action_size)
-        planner_map = {"joint": MCTSJointOSLAPlanner}
-        if config.mcts.planner_mode not in planner_map:
-            raise ValueError(
-                f"Unknown planner_mode '{config.mcts.planner_mode}'. "
-                f"Choose from: {list(planner_map.keys())}"
-            )
-        planner = planner_map[config.mcts.planner_mode](model=model, config=config)
+        planner = MCTSJointOSLAPlanner(model=model, config=config)
         self.plan_fn = jax.jit(planner.plan)
         result = ray.get(learner_actor.get_params.remote())
         self.params = result["params"]

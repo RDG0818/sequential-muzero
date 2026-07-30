@@ -1,4 +1,3 @@
-planner_mode: joint
 num_simulations: 100
 max_depth_gumbel_search: 10
 num_gumbel_samples: 10
