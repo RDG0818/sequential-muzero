@@ -23,7 +23,6 @@ class ModelConfig:
     proj_out: int
     pred_hid: int
     pred_out: int
-    use_obs_normalization: bool
 
 
 @dataclass(frozen=True)

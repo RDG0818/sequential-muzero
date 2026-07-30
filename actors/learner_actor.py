@@ -1,4 +1,3 @@
-import dataclasses
 import os
 import time
 import numpy as np
@@ -8,7 +7,6 @@ import ray
 from actors.loss import make_train_step
 from config import ExperimentConfig
 from utils.logging_utils import logger
-from utils.obs_norm import ObsRunningNorm
 from utils.profiler import Profiler
 
 
@@ -81,9 +79,6 @@ class LearnerActor:
         self.rng_key, init_key = jax.random.split(self.rng_key)
         self.params = model.init(init_key, dummy_obs)["params"]
 
-        self._use_obs_norm = config.model.use_obs_normalization
-        self.obs_norm = ObsRunningNorm(obs_size) if self._use_obs_norm else None
-
         lr = config.train.learning_rate
         # Clamp warmup so short diagnostic runs (num_episodes=300) don't produce
         # a negative decay_steps and crash cosine_decay_schedule.
@@ -139,11 +134,6 @@ class LearnerActor:
             self.opt_state = restored["opt_state"]
             self.ema_params = restored.get("ema_params", self.params)
             self.train_step_count = int(restored["step"])
-            if self._use_obs_norm and "obs_norm_mean" in restored:
-                self.obs_norm = ObsRunningNorm.from_state(
-                    {"mean": restored["obs_norm_mean"], "var": restored["obs_norm_var"]},
-                    obs_size,
-                )
             logger.info(
                 f"(Learner pid={os.getpid()}) Restored checkpoint from step {self.train_step_count}."
             )
@@ -180,14 +170,6 @@ class LearnerActor:
 
         # Fire the next buffer sample immediately so it overlaps with GPU compute.
         self._prefetch_batch()
-
-        # Observation normalization: update running stats then normalize the batch.
-        # Done on CPU (numpy) before device_put so the GPU only sees clean inputs.
-        if self._use_obs_norm:
-            self.obs_norm.update(batch.observation)
-            batch = dataclasses.replace(
-                batch, observation=self.obs_norm.normalize(batch.observation)
-            )
 
         # Dispatch H2D transfer immediately after getting the batch (JAX async —
         # returns a future-like DeviceArray; actual DMA runs in background).
@@ -301,17 +283,12 @@ class LearnerActor:
             "ema_params": self.ema_params,
             "step": np.array(self.train_step_count),
         }
-        if self._use_obs_norm:
-            norm_s = self.obs_norm.state()
-            state["obs_norm_mean"] = norm_s["mean"]
-            state["obs_norm_var"] = norm_s["var"]
         self.ckpt_manager.save(self.train_step_count, args=ocp.args.StandardSave(state))
         self.ckpt_manager.wait_until_finished()
         logger.info(f"(Learner) Saved checkpoint at step {self.train_step_count}.")
 
     def get_params(self):
-        norm_state = self.obs_norm.state() if self._use_obs_norm else None
-        return {"params": self.params, "norm_state": norm_state}
+        return {"params": self.params}
 
     def get_train_step_count(self) -> int:
         return self.train_step_count

@@ -63,7 +63,6 @@ def model_config():
         proj_out=PROJ,
         pred_hid=PROJ,
         pred_out=PROJ,
-        use_obs_normalization=False,
     )
 
 

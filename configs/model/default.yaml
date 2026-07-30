@@ -14,4 +14,3 @@ proj_hid: 256
 proj_out: 256
 pred_hid: 64
 pred_out: 256
-use_obs_normalization: false

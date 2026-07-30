@@ -103,7 +103,6 @@ envs/
   __init__.py             # make_env_wrapper / make_vec_env_wrapper factory functions
   smax_env_wrapper.py     # SMAXEnvWrapper + VecSMAXEnvWrapper (JaxMARL HeuristicEnemySMAX)
 utils/
-  obs_norm.py             # ObsRunningNorm — EMA per-feature observation normalizer
   transforms.py           # DiscreteSupport, scalar_to_support, support_to_scalar, muzero_scale/inv
   replay_buffer.py        # ReplayBuffer, ReplayItem, Episode, Transition, process_episode
   logging_utils.py        # logger singleton
@@ -119,13 +118,13 @@ tests/
 
 **Training system** (`train/muzero.py` + `actors/` + `training/`): Asynchronous actor-learner pattern using Ray.
 - `LearnerActor` (GPU): runs a self-driving training loop (`run_training_loop(N)`) that executes N steps internally before returning to the main loop. Eliminates Ray round-trip overhead between steps. Prefetches the next batch from the buffer while the GPU trains. EMA update is JIT-compiled to avoid per-leaf kernel launches. `make_train_step` returns a single packed `transfer_buf = jnp.concatenate([metric_scalars, grad_norm, priorities])` so all GPU→CPU data crosses PCIe in one DMA transaction; `_train_step` slices it after `np.array(transfer_buf)`.
-- `DataActor` (CPU, N instances, `@ray.remote(num_cpus=1)`): runs MCTS episodes, ships `ReplayItem`s to the buffer. Syncs params asynchronously (fires `get_params.remote()` at end of episode, resolves at start of next) so the ~300ms transfer overlaps with MCTS compute. Applies observation normalization on CPU before sending to JAX if `use_obs_normalization=True`.
+- `DataActor` (CPU, N instances, `@ray.remote(num_cpus=1)`): runs MCTS episodes, ships `ReplayItem`s to the buffer. Syncs params asynchronously (fires `get_params.remote()` at end of episode, resolves at start of next) so the ~300ms transfer overlaps with MCTS compute.
 - `ReplayBufferActor`: wraps `ReplayBuffer` (prioritized experience replay), backed by `cpprb.PrioritizedReplayBuffer`. `jax.device_put()` uses the normal pageable-memory path (the prior C++ backend's CUDA-pinned DMA optimization was removed along with the custom extension — see git history for the swap).
 - `ReanalyzeActor` (CPU, optional, `@ray.remote(num_cpus=2)`): continuously re-runs MCTS on stored observations with the latest params to generate fresher policy/value targets. Updates only position 0 (root) of each stored sequence. Controlled by `num_reanalyze_actors` and `reanalyze_batch_size` in `TrainConfig`.
 - `training/loop.py`: `run_warmup()` fills the buffer; `run_training_loop()` drives learner, data actors, and reanalyze actors asynchronously via `ray.wait`.
 - `utils/profiler.py`: `Profiler` class used in all actors. Reports mean time per named operation every `debug_interval` steps. JAX note: always call `jax.block_until_ready()` inside a `profiler.time()` block to measure actual GPU/CPU compute, not just async dispatch time.
 
-**Param sync protocol**: `get_params()` returns `{"params": ..., "norm_state": ...}` where `norm_state` is `None` when obs normalization is disabled, or a plain numpy dict `{mean, var, initialized}` that actors apply manually (avoiding a JAX import in the normalization path).
+**Param sync protocol**: `get_params()` returns `{"params": ...}`.
 
 **World model** (`model/`):
 - `FlaxMAMuZeroNet`: top-level Flax module with four sub-networks.
@@ -144,12 +143,11 @@ tests/
 **MCTS planners** (`mcts/`):
 - `MCTSJointOSLAPlanner`: custom JAX MCTS with its own `RecurrentFnOutput` NamedTuple as a plain return-type container — no `mctx` dependency at all. Per-node OS(λ) backup — each node tracks per-simulation values/depths; UCB selection uses OS(λ)-estimated Q-values (top (1-rho) quantile weighted by λ^depth). Vmapped over B environments; `jax.lax.fori_loop` over simulations. Matches MAZero algorithm exactly. Public entry point: `planner.plan(params, rng_key, obs)` — the only planner — `MCTSJointOSLAPlanner` owns all of its own config extraction directly (no separate base class).
 
-**Data flow**: `observation (B,N,obs_dim)` → [obs normalization] → representation → latent `(B,N,D)` → MCTS (calls `recurrent_inference` inside simulations) → `MCTSPlanOutput` → `Transition` → `Episode` → `process_episode` (n-step returns) → `ReplayItem` → `ReplayBuffer`.
+**Data flow**: `observation (B,N,obs_dim)` → representation → latent `(B,N,D)` → MCTS (calls `recurrent_inference` inside simulations) → `MCTSPlanOutput` → `Transition` → `Episode` → `process_episode` (n-step returns) → `ReplayItem` → `ReplayBuffer`.
 
 **Config** (`config.py` + `configs/`): Hydra composes YAML files into a `DictConfig`, which `_build_config()` in `train/muzero.py` converts to typed dataclasses (`ModelConfig`, `MCTSConfig`, `TrainConfig`, `ExperimentConfig`). The dataclass instance is passed explicitly to every Ray actor constructor — there is no global singleton. All three sub-configs are `frozen=True`.
 
 Notable config fields added since original docs:
-- `ModelConfig.use_obs_normalization: bool` — enables `ObsRunningNorm` in the learner; default `false`
 - `TrainConfig.consistency_horizon: int` — SPR multi-step horizon (1 = original, default in default.yaml)
 - `TrainConfig.awpo_alpha: float` — AWPO temperature; 0.0 = disabled (default), 1.0 for SMAX
 
@@ -171,14 +169,6 @@ Any new environment wrapper must expose:
 - `reset(rng_key) → (observation, state)` where observation shape is `(1, N, obs_dim)` for single-env or `(B, N, obs_dim)` for vec
 - `step(rng_key, state, actions) → (next_obs, next_state, reward, done[, won])` 
 - `observation_shape: Tuple[int, ...]`, `observation_size: int`, `action_space_size: int`
-
-## Observation Normalization
-
-`utils/obs_norm.py` — `ObsRunningNorm` class:
-- EMA per-feature normalizer updated each training batch over all `(B*N, obs_size)` observations.
-- State is plain numpy (`{mean, var, initialized}`) so it can be serialized into `get_params()` and applied on CPU in DataActor/ReanalyzeActor without triggering JAX.
-- Enabled by `use_obs_normalization: true` in model config (default `false`).
-- Checkpoint save/restore includes `obs_norm_mean` and `obs_norm_var` when enabled.
 
 ## MAZero Reference Implementation (`../MAZero/`)
 
@@ -247,7 +237,6 @@ Items marked **[easy]** are straightforward; **[medium]** require more design wo
 ### Utils
 
 - **[done→removed 2026-07-29]** the custom C++/CUDA replay buffer was replaced by `cpprb` in the second simplification pass — see `docs/superpowers/specs/2026-07-29-second-simplification-pass-design.md`.
-- **[done] Observation normalization** — `utils/obs_norm.py`: EMA per-feature normalizer, synced to actors via `get_params()`.
 
 ### Model
 

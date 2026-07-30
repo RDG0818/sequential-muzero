@@ -83,7 +83,6 @@ class ReanalyzeActor:
         self.plan_fn = jax.jit(planner.plan)
         result = ray.get(learner_actor.get_params.remote())
         self.params = result["params"]
-        self.norm_state = result["norm_state"]
         self._param_future = None
         self.profiler = Profiler(f"reanalyze[{actor_id}]", log_interval=config.train.debug_interval)
         logger.info(f"(ReanalyzeActor {actor_id} pid={os.getpid()}) Setup complete.")
@@ -116,19 +115,13 @@ class ReanalyzeActor:
                 if ready:
                     result = ray.get(self._param_future)
                     self.params = result["params"]
-                    self.norm_state = result["norm_state"]
                     self._param_future = None
             if self._param_future is None:
                 self._param_future = self.learner.get_params.remote()
 
         with self.profiler.time("mcts_plan"):
             self.rng_key, plan_key = jax.random.split(self.rng_key)
-            obs_arr = np.array(observations)
-            if self.norm_state is not None:
-                obs_arr = (obs_arr - self.norm_state["mean"]) / np.sqrt(
-                    self.norm_state["var"] + 1e-5
-                )
-            plan_output = self.plan_fn(self.params, plan_key, jnp.array(obs_arr))
+            plan_output = self.plan_fn(self.params, plan_key, jnp.array(observations))
             jax.block_until_ready(plan_output.policy_targets)
 
         with self.profiler.time("buffer_update"):

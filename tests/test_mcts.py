@@ -86,7 +86,6 @@ def test_config():
             proj_out=16,
             pred_hid=16,
             pred_out=16,
-            use_obs_normalization=False,
         ),
         mcts=MCTSConfig(
             num_simulations=8,           # minimum viable for gumbel (>= num_gumbel_samples)
