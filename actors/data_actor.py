@@ -105,11 +105,7 @@ class DataActor:
         logger.info(f"(DataActor {actor_id} pid={os.getpid()}) Setup complete.")
 
     def run_episode(self) -> float:
-        """
-        Runs num_envs_per_actor episodes in parallel, processes them into
-        ReplayItems, and ships them to the buffer.
-        Returns the mean undiscounted episode return across all envs.
-        """
+        """Runs one batch of parallel episodes and ships them to the replay buffer."""
         import jax
         import jax.numpy as jnp
         from utils.replay_buffer import Episode, Transition, process_episode

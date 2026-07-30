@@ -524,8 +524,7 @@ class MCTSJointOSLAPlanner:
     def plan(
         self, params, rng_key: chex.Array, observation: chex.Array
     ) -> MCTSPlanOutput:
-        """Public entry point. JIT compilation is the caller's responsibility
-        (DataActor wraps this with jax.jit at construction time)."""
+        """Public entry point for planning."""
         return self._plan_loop(params, rng_key, observation)
 
     def _plan_loop(

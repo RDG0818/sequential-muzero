@@ -37,12 +37,7 @@ from training import run_warmup, run_training_loop
 
 @ray.remote
 def _fetch_env_metadata(config: ExperimentConfig) -> Tuple[int, int]:
-    """
-    Returns (obs_size, action_size) by instantiating a temporary env.
-
-    Runs as a Ray task so JAX (imported transitively by env wrappers) is
-    never initialized in the main process, preserving GPU memory for LearnerActor.
-    """
+    """Returns (obs_size, action_size) by instantiating a temporary env."""
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     os.environ["JAX_PLATFORMS"] = "cpu"
     from envs import make_env_wrapper
@@ -78,8 +73,7 @@ def _build_config(cfg: DictConfig) -> ExperimentConfig:
     )
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="config")
-def main(cfg: DictConfig):
+def run(cfg: DictConfig):
     config = _build_config(cfg)
 
     os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
@@ -106,6 +100,11 @@ def main(cfg: DictConfig):
         wandb.finish()
 
     ray.shutdown()
+
+
+@hydra.main(version_base=None, config_path="../configs", config_name="config")
+def main(cfg: DictConfig):
+    run(cfg)
 
 
 if __name__ == "__main__":

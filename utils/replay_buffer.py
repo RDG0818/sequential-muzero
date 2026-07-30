@@ -10,9 +10,6 @@ from cpprb import PrioritizedReplayBuffer as _PRB
 
 @dataclass
 class Transition:
-    """
-    Holds all the data for a single step (or transition) in an environment.
-    """
     observation: np.ndarray
     action: np.ndarray
     reward: float
@@ -27,9 +24,6 @@ class Transition:
 
 @dataclass
 class Episode:
-    """
-    A container for a full episode's trajectory and metadata.
-    """
     trajectory: List[Transition] = field(default_factory=list)
     episode_return: float = 0.0
 

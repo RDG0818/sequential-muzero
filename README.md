@@ -41,10 +41,10 @@ pip install -r requirements.txt
 
 ```bash
 # SMAX 3m (default)
-python train/muzero.py model=smax mcts=joint
+python train.py model=smax mcts=joint
 
 # Override hyperparameters
-python train/muzero.py train.batch_size=512 mcts.num_simulations=100
+python train.py train.batch_size=512 mcts.num_simulations=100
 
 # Evaluate
 python eval.py eval_episodes=200

@@ -26,12 +26,7 @@ from utils.logging_utils import logger
 
 @ray.remote
 def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_episodes: int) -> tuple:
-    """
-    Runs `num_episodes` evaluation episodes in a Ray task (keeps JAX off the
-    main process, same pattern as DataActor and _fetch_env_metadata).
-
-    Returns (returns, wins, ckpt_step).
-    """
+    """Returns (returns, wins, ckpt_step) over num_episodes."""
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     os.environ["JAX_PLATFORMS"] = "cpu"
 

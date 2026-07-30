@@ -246,13 +246,7 @@ class LearnerActor:
         return metrics
 
     def run_training_loop(self, num_steps: int):
-        """Runs a tight internal training loop for num_steps steps.
-
-        Called once from the main loop per log interval instead of once per
-        step. Eliminates Ray round-trip overhead between training steps —
-        the learner stays on GPU continuously rather than waiting for the
-        main process to re-dispatch it after each step.
-        """
+        """Runs num_steps training steps back-to-back without returning to the caller."""
         metrics = None
         for _ in range(num_steps):
             result = self._train_step()

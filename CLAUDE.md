@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 Primary scenario: **SMAX 3m** (3 allies vs 3 scripted marines, JaxMARL HeuristicEnemySMAX).
 
 ```bash
-python train/muzero.py model=smax mcts=joint
+python train.py model=smax mcts=joint
 ```
 
 Key config group files:
@@ -39,11 +39,11 @@ pip install -r requirements.txt
 wandb login  # set wandb_mode to "online" in configs/train/default.yaml to enable
 
 # Run training
-python train/muzero.py                                  # default config (SMAX 3m)
-python train/muzero.py model=smax mcts=joint             # SMAX 3m (primary target)
-python train/muzero.py mcts=joint                       # lighter 50-sim preset (default is 100-sim mcts/default.yaml)
-python train/muzero.py train.num_episodes=50000         # override single value
-python train/muzero.py train.batch_size=128 mcts.num_simulations=50
+python train.py                                  # default config (SMAX 3m)
+python train.py model=smax mcts=joint             # SMAX 3m (primary target)
+python train.py mcts=joint                       # lighter 50-sim preset (default is 100-sim mcts/default.yaml)
+python train.py train.num_episodes=50000         # override single value
+python train.py train.batch_size=128 mcts.num_simulations=50
 
 # Evaluate a checkpoint
 python eval.py                                   # latest checkpoint, default config
@@ -68,8 +68,9 @@ Violating these rules causes silent failures or segfaults that are difficult to 
 ## Package Layout
 
 ```
+train.py                  # root entry point (@hydra.main), delegates to train/muzero.py's run()
 train/
-  muzero.py               # entry point (@hydra.main, builds ExperimentConfig, launches Ray actors)
+  muzero.py               # run() builds ExperimentConfig, launches Ray actors; also its own @hydra.main for `python train/muzero.py`
 eval.py                   # standalone eval: loads checkpoint, runs N MCTS episodes, logs return
 conftest.py               # pytest: adds project root to sys.path
 config.py                 # dataclasses only: ModelConfig, MCTSConfig, TrainConfig, ExperimentConfig
@@ -116,7 +117,7 @@ tests/
 
 ## Architecture
 
-**Training system** (`train/muzero.py` + `actors/` + `training/`): Asynchronous actor-learner pattern using Ray.
+**Training system** (`train.py` + `train/muzero.py` + `actors/` + `training/`): Asynchronous actor-learner pattern using Ray.
 - `LearnerActor` (GPU): runs a self-driving training loop (`run_training_loop(N)`) that executes N steps internally before returning to the main loop. Eliminates Ray round-trip overhead between steps. Prefetches the next batch from the buffer while the GPU trains. EMA update is JIT-compiled to avoid per-leaf kernel launches. `make_train_step` returns a single packed `transfer_buf = jnp.concatenate([metric_scalars, grad_norm, priorities])` so all GPU→CPU data crosses PCIe in one DMA transaction; `_train_step` slices it after `np.array(transfer_buf)`.
 - `DataActor` (CPU, N instances, `@ray.remote(num_cpus=1)`): runs MCTS episodes, ships `ReplayItem`s to the buffer. Syncs params asynchronously (fires `get_params.remote()` at end of episode, resolves at start of next) so the ~300ms transfer overlaps with MCTS compute.
 - `ReplayBufferActor`: wraps `ReplayBuffer` (prioritized experience replay), backed by `cpprb.PrioritizedReplayBuffer`. `jax.device_put()` uses the normal pageable-memory path (the prior C++ backend's CUDA-pinned DMA optimization was removed along with the custom extension — see git history for the swap).
@@ -228,7 +229,7 @@ adv_clip: 3.0           # we clip advantage to [-5, 5] in exp() before normalizi
 ## Key TODOs in the Codebase
 
 - Environment wrapper abstract base class (`envs/base.py`)
-- Unit tests for `train.py`
+- Unit tests for the training entry point (`train.py` / `train/muzero.py`)
 
 ## Future Improvements
 
