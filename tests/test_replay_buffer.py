@@ -1,5 +1,5 @@
 """
-Tests for the C++ prioritized replay buffer.
+Tests for the cpprb-backed prioritized replay buffer.
 
 Covers:
  - add / sample shapes and dtypes
@@ -7,8 +7,7 @@ Covers:
  - update_targets writes only to position 0
  - sample_for_reanalysis uniqueness and shapes
  - get_stats keys
- - Pure-Python fallback still works
- - C++ backend is active when available
+ - process_episode (pure Python, backend-independent)
 
 Run with:
     conda run -n mazero pytest tests/test_replay_buffer.py -v
@@ -27,6 +26,7 @@ OBS_SIZE    = 8
 A           = 5    # action space size
 N           = 3    # num agents
 U           = 3    # unroll steps
+K           = 5    # sampled joint actions per node
 BATCH       = 16
 REANALYZE_B = 8
 
@@ -53,7 +53,10 @@ def make_item(rng=None):
         policy_target = rng.random((U+1, N, A),      dtype=np.float32),
         value_target  = rng.random((U+1, N),         dtype=np.float32),
         reward_target = rng.random((U, N),           dtype=np.float32),
-        agent_order   = np.arange(N,                 dtype=np.int32),
+        all_child_actions = rng.integers(0, A, (U+1, K, N), dtype=np.int32),
+        all_child_q        = rng.random((U+1, K), dtype=np.float32),
+        all_child_visits   = rng.random((U+1, K), dtype=np.float32),
+        all_child_valid    = np.ones(U+1, dtype=bool),
     )
 
 
@@ -61,27 +64,6 @@ def fill_buffer(buf: ReplayBuffer, n: int):
     rng = np.random.default_rng(0)
     for _ in range(n):
         buf.add(make_item(rng), priority=1.0)
-
-
-# ─── Backend detection ──────────────────────────────────────────────────────
-
-def test_cpp_backend_loaded():
-    """C++ module must be importable in this environment."""
-    try:
-        import _replay_buffer_cpp  # noqa: F401
-    except ImportError:
-        pytest.skip("C++ backend not built — skipping backend-specific tests")
-
-
-def test_replay_buffer_uses_cpp():
-    """ReplayBuffer should use the C++ backend when available."""
-    try:
-        import _replay_buffer_cpp  # noqa: F401
-    except ImportError:
-        pytest.skip("C++ backend not built")
-    buf = ReplayBuffer(**make_config())
-    assert buf._use_cpp, "Expected C++ backend to be active"
-    assert buf._buf.is_pinned() or True  # pinned iff CUDA available; either is fine
 
 
 # ─── add / sample ───────────────────────────────────────────────────────────
@@ -105,7 +87,6 @@ def test_sample_returns_correct_shapes(filled_buffer):
     assert batch.policy_target.shape == (BATCH, U+1, N, A)
     assert batch.value_target.shape  == (BATCH, U+1, N)
     assert batch.reward_target.shape == (BATCH, U, N)
-    assert batch.agent_order.shape   == (BATCH, N)
     assert weights.shape == (BATCH,)
     assert indices.shape == (BATCH,)
 
@@ -172,7 +153,6 @@ def test_update_targets_writes_position_0_only():
 
     # Sample to get some valid indices.
     batch, _, indices = buf.sample(BATCH)
-    original_batch = batch
 
     # Overwrite with distinctive values.
     new_policy = np.ones((BATCH, N, A), dtype=np.float32) * 99.0
@@ -196,22 +176,21 @@ def test_update_targets_writes_position_0_only():
 # ─── sample_for_reanalysis ──────────────────────────────────────────────────
 
 def test_sample_for_reanalysis_shapes(filled_buffer):
-    indices, obs, orders = filled_buffer.sample_for_reanalysis(REANALYZE_B)
+    indices, obs = filled_buffer.sample_for_reanalysis(REANALYZE_B)
     assert indices is not None
     assert obs.shape    == (REANALYZE_B, N, OBS_SIZE)
-    assert orders.shape == (REANALYZE_B, N)
     assert indices.shape == (REANALYZE_B,)
 
 
 def test_sample_for_reanalysis_unique_indices(filled_buffer):
-    indices, _, _ = filled_buffer.sample_for_reanalysis(REANALYZE_B)
+    indices, _ = filled_buffer.sample_for_reanalysis(REANALYZE_B)
     assert len(np.unique(indices)) == REANALYZE_B, "Indices should be unique (no replacement)"
 
 
 def test_sample_for_reanalysis_empty_returns_none():
     buf = ReplayBuffer(**make_config())
     result = buf.sample_for_reanalysis(REANALYZE_B)
-    assert result == (None, None, None)
+    assert result == (None, None)
 
 
 # ─── get_stats ──────────────────────────────────────────────────────────────
@@ -234,33 +213,7 @@ def test_get_stats_empty():
     assert stats["size"] == 0
 
 
-# ─── Pure-Python fallback ────────────────────────────────────────────────────
-
-def test_python_fallback_produces_same_shapes(monkeypatch):
-    """Force the Python fallback and verify it produces the same output shapes."""
-    import utils.replay_buffer as rb_module
-    # Temporarily hide the C++ backend.
-    orig_cpp = rb_module._CppReplayBuffer
-    orig_cfg = rb_module._CppConfig
-    monkeypatch.setattr(rb_module, "_CppReplayBuffer", None)
-    monkeypatch.setattr(rb_module, "_CppConfig", None)
-
-    buf = ReplayBuffer(**make_config())
-    assert not buf._use_cpp
-
-    fill_buffer(buf, CAPACITY)
-    batch, weights, indices = buf.sample(BATCH)
-
-    assert batch.observation.shape   == (BATCH, N, OBS_SIZE)
-    assert weights.shape             == (BATCH,)
-    assert indices.shape             == (BATCH,)
-
-    # Restore.
-    monkeypatch.setattr(rb_module, "_CppReplayBuffer", orig_cpp)
-    monkeypatch.setattr(rb_module, "_CppConfig", orig_cfg)
-
-
-# ─── process_episode (pure Python, unchanged) ──────────────────────────────
+# ─── process_episode (pure Python, backend-independent) ────────────────────
 
 def test_process_episode_basic():
     ep = Episode()
@@ -274,7 +227,9 @@ def test_process_episode_basic():
             done          = False,
             policy_target = rng.random((N, A),         dtype=np.float32),
             value_target  = float(rng.random()),
-            agent_order   = np.arange(N, dtype=np.int32),
+            root_child_actions = rng.integers(0, A, (K, N), dtype=np.int32),
+            root_child_q       = rng.random(K, dtype=np.float32),
+            root_child_visits  = rng.random(K, dtype=np.float32),
         ))
     items = process_episode(ep, unroll_steps=U, n_step=5,
                             discount_gamma=0.99, num_agents=N)
@@ -285,6 +240,7 @@ def test_process_episode_basic():
     assert item.policy_target.shape == (U+1, N, A)
     assert item.value_target.shape  == (U+1, N)
     assert item.reward_target.shape == (U, N)
+    assert item.all_child_q.shape   == (U+1, K)
 
 
 def test_process_episode_too_short():
@@ -296,7 +252,9 @@ def test_process_episode_too_short():
             reward=0.0, done=False,
             policy_target=np.zeros((N, A), dtype=np.float32),
             value_target=0.0,
-            agent_order=np.arange(N, dtype=np.int32),
+            root_child_actions=np.zeros((K, N), dtype=np.int32),
+            root_child_q=np.zeros(K),
+            root_child_visits=np.ones(K),
         ))
     items = process_episode(ep, unroll_steps=5, n_step=3,
                             discount_gamma=0.99, num_agents=N)
@@ -305,15 +263,12 @@ def test_process_episode_too_short():
 
 def test_replay_item_all_child_fields_exist():
     """ReplayItem should have all_child_* fields for per-step Q-data."""
-    from utils.replay_buffer import ReplayItem
-    import numpy as np
     item = ReplayItem(
         observation=np.zeros((3, 10)),
         actions=np.zeros((5, 3), dtype=np.int32),
         policy_target=np.zeros((6, 3, 9)),
         value_target=np.zeros((6, 3)),
         reward_target=np.zeros((5, 3)),
-        agent_order=np.arange(3),
         all_child_actions=np.zeros((6, 10, 3), dtype=np.int32),
         all_child_q=np.zeros((6, 10)),
         all_child_visits=np.zeros((6, 10)),
@@ -327,55 +282,29 @@ def test_replay_item_all_child_fields_exist():
 
 def test_process_episode_all_child_q_shape():
     """process_episode should store Q-data for all U+1 positions."""
-    from utils.replay_buffer import Episode, Transition, process_episode
-    import numpy as np
-
-    N, A, K, U, T = 3, 9, 5, 5, 12
+    N_, A_, K_, U_, T_ = 3, 9, 5, 5, 12
     obs_size = 18
     ep = Episode()
-    for _ in range(T):
+    for _ in range(T_):
         ep.add_step(Transition(
-            observation=np.zeros((N, obs_size)),
-            action=np.zeros(N, dtype=np.int32),
+            observation=np.zeros((N_, obs_size)),
+            action=np.zeros(N_, dtype=np.int32),
             reward=0.0,
             done=False,
-            policy_target=np.ones((N, A)) / A,
+            policy_target=np.ones((N_, A_)) / A_,
             value_target=0.0,
-            agent_order=np.arange(N),
-            root_child_actions=np.zeros((K, N), dtype=np.int32),
-            root_child_q=np.zeros(K),
-            root_child_visits=np.ones(K),
+            root_child_actions=np.zeros((K_, N_), dtype=np.int32),
+            root_child_q=np.zeros(K_),
+            root_child_visits=np.ones(K_),
         ))
-    items = process_episode(ep, unroll_steps=U, n_step=5, discount_gamma=0.99, num_agents=N)
+    items = process_episode(ep, unroll_steps=U_, n_step=5, discount_gamma=0.99, num_agents=N_)
     assert len(items) > 0
     it = items[0]
-    assert it.all_child_actions is not None
-    assert it.all_child_q.shape == (U + 1, K)
-    assert it.all_child_actions.shape == (U + 1, K, N)
-    assert it.all_child_visits.shape == (U + 1, K)
-    assert it.all_child_valid.shape == (U + 1,)
+    assert it.all_child_q.shape == (U_ + 1, K_)
+    assert it.all_child_actions.shape == (U_ + 1, K_, N_)
+    assert it.all_child_visits.shape == (U_ + 1, K_)
+    assert it.all_child_valid.shape == (U_ + 1,)
     assert it.all_child_valid.all(), "all positions should be valid since ep_len > U"
-
-
-def test_process_episode_all_child_q_none_without_q():
-    """process_episode should leave all_child_* as None when Transitions have no Q-data."""
-    from utils.replay_buffer import Episode, Transition, process_episode
-    import numpy as np
-
-    ep = Episode()
-    for _ in range(10):
-        ep.add_step(Transition(
-            observation=np.zeros((3, 18)),
-            action=np.zeros(3, dtype=np.int32),
-            reward=0.0, done=False,
-            policy_target=np.ones((3, 9)) / 9,
-            value_target=0.0,
-            agent_order=np.arange(3),
-        ))
-    items = process_episode(ep, unroll_steps=5, n_step=5, discount_gamma=0.99, num_agents=3)
-    for it in items:
-        assert it.all_child_q is None
-        assert it.all_child_actions is None
 
 
 def test_process_episode_never_indexes_past_episode_end():
@@ -387,21 +316,20 @@ def test_process_episode_never_indexes_past_episode_end():
     construction: it only emits windows fully inside the episode, and
     returns none at all for episodes too short to fit one.
     """
-    from utils.replay_buffer import Transition, Episode, process_episode
-    import numpy as np
-
-    N, obs_size, A = 2, 4, 3
+    N_, obs_size, A_, K_ = 2, 4, 3, 4
     unroll_steps, n_step, discount = 5, 3, 0.99
 
     def make_transition(step: int) -> Transition:
         return Transition(
-            observation=np.full((N, obs_size), step, dtype=np.float32),
-            action=np.zeros(N, dtype=np.int32),
+            observation=np.full((N_, obs_size), step, dtype=np.float32),
+            action=np.zeros(N_, dtype=np.int32),
             reward=1.0,
             done=False,
-            policy_target=np.ones((N, A), dtype=np.float32) / A,
+            policy_target=np.ones((N_, A_), dtype=np.float32) / A_,
             value_target=0.5,
-            agent_order=np.arange(N),
+            root_child_actions=np.zeros((K_, N_), dtype=np.int32),
+            root_child_q=np.zeros(K_),
+            root_child_visits=np.ones(K_),
         )
 
     # Episode shorter than unroll_steps: must produce zero items, never a
@@ -409,7 +337,7 @@ def test_process_episode_never_indexes_past_episode_end():
     short_episode = Episode()
     for t in range(3):
         short_episode.add_step(make_transition(t))
-    assert process_episode(short_episode, unroll_steps, n_step, discount, N) == []
+    assert process_episode(short_episode, unroll_steps, n_step, discount, N_) == []
 
     # Episode longer than unroll_steps: every returned item's window must be
     # fully inside [0, ep_len).
@@ -418,7 +346,7 @@ def test_process_episode_never_indexes_past_episode_end():
     for t in range(ep_len):
         long_episode.add_step(make_transition(t))
 
-    items = process_episode(long_episode, unroll_steps, n_step, discount, N)
+    items = process_episode(long_episode, unroll_steps, n_step, discount, N_)
     assert len(items) == ep_len - unroll_steps
     for i in range(len(items)):
         assert i + unroll_steps < ep_len, (

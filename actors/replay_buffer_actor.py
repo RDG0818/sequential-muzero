@@ -42,13 +42,10 @@ class ReplayBufferActor:
         for item, priority in zip(items, priorities):
             slot = self._add_counter % self._capacity
             self.buffer.add(item, priority)
-            if item.all_child_q is not None:
-                self._q_actions[slot] = item.all_child_actions  # (U+1, K, N)
-                self._q_values[slot]  = item.all_child_q        # (U+1, K)
-                self._q_visits[slot]  = item.all_child_visits   # (U+1, K)
-                self._q_valid[slot]   = item.all_child_valid    # (U+1,) bool
-            else:
-                self._q_valid[slot] = np.zeros(self._q_valid.shape[1], dtype=bool)
+            self._q_actions[slot] = item.all_child_actions  # (U+1, K, N)
+            self._q_values[slot]  = item.all_child_q        # (U+1, K)
+            self._q_visits[slot]  = item.all_child_visits   # (U+1, K)
+            self._q_valid[slot]   = item.all_child_valid    # (U+1,) bool
             self._add_counter += 1
 
     def sample(self, batch_size: int):

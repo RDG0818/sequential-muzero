@@ -680,12 +680,6 @@ class TestMCTSJointOSLAPlanner:
         all_same = all(jnp.array_equal(results[0], r) for r in results[1:])
         assert not all_same
 
-    def test_agent_order_sequential(self, osla_plan_fn, params, obs):
-        plan_fn, _ = osla_plan_fn
-        out = plan_fn(params, jax.random.PRNGKey(0), obs)
-        assert jnp.array_equal(out.agent_order, jnp.arange(N))
-
-
 def test_reanalyze_actor_uses_osla_planner():
     """ReanalyzeActor's planner_map must map 'joint' to MCTSJointOSLAPlanner."""
     import pathlib

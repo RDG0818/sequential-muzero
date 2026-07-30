@@ -11,5 +11,4 @@ orbax-checkpoint
 hydra-core
 distrax
 cpprb
-pybind11
 psutil

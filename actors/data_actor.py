@@ -162,19 +162,10 @@ class DataActor:
                 actions_np = np.array(plan_output.joint_action)
                 root_values_np = np.array(plan_output.root_value)
                 policy_targets_np = np.array(plan_output.policy_targets)
-                # Q-data for action-level AWPO (None for non-OSLA planners)
-                root_child_actions_np = (
-                    np.array(plan_output.root_child_actions)
-                    if plan_output.root_child_actions is not None else None
-                )  # (B, K, N) or None
-                root_child_q_np = (
-                    np.array(plan_output.root_child_q)
-                    if plan_output.root_child_q is not None else None
-                )  # (B, K) or None
-                root_child_visits_np = (
-                    np.array(plan_output.root_child_visits)
-                    if plan_output.root_child_visits is not None else None
-                )  # (B, K) or None
+                # Q-data for action-level AWPO
+                root_child_actions_np = np.array(plan_output.root_child_actions)  # (B, K, N)
+                root_child_q_np = np.array(plan_output.root_child_q)              # (B, K)
+                root_child_visits_np = np.array(plan_output.root_child_visits)    # (B, K)
 
             if debug and (np.isnan(policy_targets_np).any() or np.isnan(actions_np).any()):
                 logger.warning(f"(DataActor {self.actor_id}) NaN detected in plan output")
@@ -199,16 +190,9 @@ class DataActor:
                         done=bool(dones_np[i]),
                         policy_target=policy_targets_np[i],
                         value_target=float(root_values_np[i]),
-                        agent_order=np.array(plan_output.agent_order),
-                        root_child_actions=(
-                            root_child_actions_np[i] if root_child_actions_np is not None else None
-                        ),
-                        root_child_q=(
-                            root_child_q_np[i] if root_child_q_np is not None else None
-                        ),
-                        root_child_visits=(
-                            root_child_visits_np[i] if root_child_visits_np is not None else None
-                        ),
+                        root_child_actions=root_child_actions_np[i],
+                        root_child_q=root_child_q_np[i],
+                        root_child_visits=root_child_visits_np[i],
                     )
                 )
                 if won_np[i]:

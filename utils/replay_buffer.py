@@ -1,8 +1,11 @@
 # utils/replay_buffer.py
+"""Prioritized experience replay, backed by cpprb.PrioritizedReplayBuffer."""
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Tuple
 from jax import tree_util
+
+from cpprb import PrioritizedReplayBuffer as _PRB
 
 
 @dataclass
@@ -16,11 +19,10 @@ class Transition:
     done: bool
     policy_target: np.ndarray
     value_target: float
-    agent_order: np.ndarray
-    # Per-root-child Q-data for action-level AWPO (None for non-OSLA planners)
-    root_child_actions: np.ndarray = None  # (K, N) int32
-    root_child_q: np.ndarray = None        # (K,) float32
-    root_child_visits: np.ndarray = None   # (K,) float32
+    # Per-root-child Q-data for action-level AWPO.
+    root_child_actions: np.ndarray  # (K, N) int32
+    root_child_q: np.ndarray        # (K,) float32
+    root_child_visits: np.ndarray   # (K,) float32
 
 
 @dataclass
@@ -50,14 +52,13 @@ class ReplayItem:
     policy_target: np.ndarray  # (B, U+1, N, A)
     value_target: np.ndarray   # (B, U+1, N)
     reward_target: np.ndarray  # (B, U, N)
-    agent_order: np.ndarray    # (B, N)
     # Per-step Q-data for action-level AWPO at all U+1 positions.
-    # Not in the JAX pytree — stored in ReplayBufferActor sidecar, injected at sample time.
-    # None when collected by a non-OSLA planner.
-    all_child_actions: np.ndarray = None  # (U+1, K, N) int32
-    all_child_q: np.ndarray = None        # (U+1, K) float32
-    all_child_visits: np.ndarray = None   # (U+1, K) float32
-    all_child_valid: np.ndarray = None    # (U+1,) bool
+    # Not part of the JAX pytree below — stored in ReplayBufferActor's
+    # sidecar arrays, injected alongside the sampled batch at sample time.
+    all_child_actions: np.ndarray  # (U+1, K, N) int32
+    all_child_q: np.ndarray  # (U+1, K) float32
+    all_child_visits: np.ndarray  # (U+1, K) float32
+    all_child_valid: np.ndarray  # (U+1,) bool
 
 
 def flatten_replay_item(item: ReplayItem):
@@ -67,19 +68,23 @@ def flatten_replay_item(item: ReplayItem):
         item.policy_target,
         item.value_target,
         item.reward_target,
-        item.agent_order,
     )
     return children, None
 
 
 def unflatten_replay_item(static_data, children):
+    # Q-data fields aren't part of this pytree (see ReplayItem docstring) —
+    # explicitly None here since nothing reads them off a tree_map'd instance.
     return ReplayItem(
         observation=children[0],
         actions=children[1],
         policy_target=children[2],
         value_target=children[3],
         reward_target=children[4],
-        agent_order=children[5],
+        all_child_actions=None,
+        all_child_q=None,
+        all_child_visits=None,
+        all_child_valid=None,
     )
 
 
@@ -90,28 +95,8 @@ tree_util.register_pytree_node(
 )
 
 
-# Falls back to the pure-Python implementation if the C++ extension isn't built.
-def _try_import_cpp():
-    try:
-        import _replay_buffer_cpp as _cpp
-        return _cpp.ReplayBuffer, _cpp.ReplayBufferConfig
-    except ImportError:
-        return None, None
-
-_CppReplayBuffer, _CppConfig = _try_import_cpp()
-
-
 class ReplayBuffer:
-    """
-    Prioritized experience replay.
-
-    Uses the C++ backend (_replay_buffer_cpp) when available:
-      - Lock-free ring buffer + sum tree (std::atomic)
-      - CUDA pinned output buffers for fast jax.device_put() transfers
-
-    Falls back to the pure-Python implementation otherwise.  The public API
-    is identical in both cases.
-    """
+    """Prioritized experience replay, backed by cpprb.PrioritizedReplayBuffer."""
 
     def __init__(
         self,
@@ -124,23 +109,6 @@ class ReplayBuffer:
         beta_start: float,
         beta_frames: float,
     ):
-        self._use_cpp = _CppReplayBuffer is not None
-        if self._use_cpp:
-            cfg = _CppConfig()
-            cfg.capacity          = capacity
-            cfg.obs_size          = int(np.prod(observation_shape))
-            cfg.action_space_size = action_space_size
-            cfg.num_agents        = num_agents
-            cfg.unroll_steps      = unroll_steps
-            cfg.alpha             = float(alpha)
-            cfg.beta_start        = float(beta_start)
-            cfg.beta_frames       = int(beta_frames)
-            self._buf = _CppReplayBuffer(cfg)
-            return
-
-        # ---- Pure-Python fallback ----------------------------------------
-        from cpprb import PrioritizedReplayBuffer as _PRB
-
         self.capacity     = capacity
         self.alpha        = alpha
         self.beta_start   = beta_start
@@ -152,7 +120,6 @@ class ReplayBuffer:
         self.policy_targets  = np.zeros((capacity, unroll_steps + 1, num_agents, action_space_size), dtype=np.float32)
         self.value_targets   = np.zeros((capacity, unroll_steps + 1, num_agents),   dtype=np.float32)
         self.reward_targets  = np.zeros((capacity, unroll_steps, num_agents),        dtype=np.float32)
-        self.agent_orders    = np.zeros((capacity, num_agents),                      dtype=np.int32)
         self._priorities_log = np.zeros(capacity, dtype=np.float32)
 
         self._ptree = _PRB(
@@ -165,18 +132,6 @@ class ReplayBuffer:
         self.size    = 0
 
     def add(self, item: ReplayItem, priority: float):
-        if self._use_cpp:
-            self._buf.add(
-                np.asarray(item.observation,   dtype=np.float32),
-                np.asarray(item.actions,       dtype=np.int32),
-                np.asarray(item.policy_target, dtype=np.float32),
-                np.asarray(item.value_target,  dtype=np.float32),
-                np.asarray(item.reward_target, dtype=np.float32),
-                np.asarray(item.agent_order,   dtype=np.int32),
-                float(priority),
-            )
-            return
-
         priority = float(priority) if priority > 0 else (
             self._priorities_log[:self.size].max() if self.size > 0 else 1.0
         )
@@ -186,7 +141,6 @@ class ReplayBuffer:
         self.policy_targets[idx]  = item.policy_target
         self.value_targets[idx]   = item.value_target
         self.reward_targets[idx]  = item.reward_target
-        self.agent_orders[idx]    = item.agent_order
         self._priorities_log[idx] = priority
 
         self._ptree.add(**{"_": np.zeros((1, 1), dtype=np.float32)},
@@ -196,21 +150,6 @@ class ReplayBuffer:
         self.size    = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size: int) -> Tuple[ReplayItem, np.ndarray, np.ndarray]:
-        if self._use_cpp:
-            result = self._buf.sample(batch_size)
-            if result is None:
-                return None, None, None
-            fields, weights, indices = result
-            batch = ReplayItem(
-                observation   = fields["observation"],
-                actions       = fields["actions"],
-                policy_target = fields["policy_target"],
-                value_target  = fields["value_target"],
-                reward_target = fields["reward_target"],
-                agent_order   = fields["agent_order"],
-            )
-            return batch, weights, indices
-
         if self.size == 0:
             return None, None, None
 
@@ -227,50 +166,28 @@ class ReplayBuffer:
             policy_target = self.policy_targets[indices],
             value_target  = self.value_targets[indices],
             reward_target = self.reward_targets[indices],
-            agent_order   = self.agent_orders[indices],
+            all_child_actions=None,
+            all_child_q=None,
+            all_child_visits=None,
+            all_child_valid=None,
         )
         return batch, weights, indices
 
     def sample_for_reanalysis(self, batch_size: int):
-        if self._use_cpp:
-            result = self._buf.sample_for_reanalysis(batch_size)
-            if result is None:
-                return None, None, None
-            indices, observations, agent_orders = result
-            return indices, observations, agent_orders
-
         if self.size == 0:
-            return None, None, None
+            return None, None
         indices = np.random.choice(self.size, min(batch_size, self.size), replace=False)
-        return indices, self.observations[indices].copy(), self.agent_orders[indices].copy()
+        return indices, self.observations[indices].copy()
 
     def update_targets(self, indices: np.ndarray, policy_targets: np.ndarray, root_values: np.ndarray):
-        if self._use_cpp:
-            self._buf.update_targets(
-                np.asarray(indices,        dtype=np.int64),
-                np.asarray(policy_targets, dtype=np.float32),
-                np.asarray(root_values,    dtype=np.float32),
-            )
-            return
-
         self.policy_targets[indices, 0] = policy_targets
         self.value_targets[indices, 0]  = root_values[:, None]
 
     def update_priorities(self, indices: np.ndarray, priorities: np.ndarray):
-        if self._use_cpp:
-            self._buf.update_priorities(
-                np.asarray(indices,    dtype=np.int64),
-                np.asarray(priorities, dtype=np.float32),
-            )
-            return
-
         self._priorities_log[indices] = priorities
         self._ptree.update_priorities(indices, priorities)
 
     def get_stats(self) -> dict:
-        if self._use_cpp:
-            return dict(self._buf.get_stats())
-
         if self.size == 0:
             return {"size": 0, "capacity": self.capacity, "fill_pct": 0.0}
         active = self._priorities_log[:self.size]
@@ -287,8 +204,6 @@ class ReplayBuffer:
         }
 
     def __len__(self):
-        if self._use_cpp:
-            return len(self._buf)
         return self.size
 
 
@@ -328,7 +243,6 @@ def process_episode(
     policy_targets = np.stack([t.policy_target for t in trajectory])  # (T, N, A)
     rewards = np.array([t.reward for t in trajectory], dtype=np.float32)      # (T,)
     mcts_values = np.array([t.value_target for t in trajectory], dtype=np.float32)  # (T,)
-    agent_orders = np.stack([t.agent_order for t in trajectory])      # (T, N)
 
     # Pre-compute discount coefficients [γ^0, γ^1, ..., γ^(n-1)] for np.dot.
     discount_vec = discount_gamma ** np.arange(n_step, dtype=np.float32)
@@ -355,25 +269,17 @@ def process_episode(
             rewards[start : start + unroll_steps, None], (unroll_steps, num_agents)
         ).copy().astype(np.float32)  # (U, N)
 
-        # Collect Q-data for all U+1 positions in this window.
-        # Require ALL positions to have Q-data; partial windows are treated as no Q-data.
-        has_q_data = all(
-            trajectory[start + i].root_child_q is not None
-            for i in range(unroll_steps + 1)
-        )
-        if has_q_data:
-            all_child_actions = np.stack(
-                [trajectory[start + i].root_child_actions for i in range(unroll_steps + 1)]
-            )  # (U+1, K, N)
-            all_child_q = np.stack(
-                [trajectory[start + i].root_child_q for i in range(unroll_steps + 1)]
-            )  # (U+1, K)
-            all_child_visits = np.stack(
-                [trajectory[start + i].root_child_visits for i in range(unroll_steps + 1)]
-            )  # (U+1, K)
-            all_child_valid = np.ones(unroll_steps + 1, dtype=bool)  # all positions valid
-        else:
-            all_child_actions = all_child_q = all_child_visits = all_child_valid = None
+        # Every Transition carries Q-data (the sole planner always produces it).
+        all_child_actions = np.stack(
+            [trajectory[start + i].root_child_actions for i in range(unroll_steps + 1)]
+        )  # (U+1, K, N)
+        all_child_q = np.stack(
+            [trajectory[start + i].root_child_q for i in range(unroll_steps + 1)]
+        )  # (U+1, K)
+        all_child_visits = np.stack(
+            [trajectory[start + i].root_child_visits for i in range(unroll_steps + 1)]
+        )  # (U+1, K)
+        all_child_valid = np.ones(unroll_steps + 1, dtype=bool)
 
         replay_items.append(
             ReplayItem(
@@ -382,7 +288,6 @@ def process_episode(
                 policy_target=policy_targets[start : start + unroll_steps + 1],   # (U+1, N, A)
                 value_target=value_target_per_agent,                               # (U+1, N)
                 reward_target=reward_target_per_agent,                             # (U, N)
-                agent_order=agent_orders[start],                                   # (N,)
                 all_child_actions=all_child_actions,
                 all_child_q=all_child_q,
                 all_child_visits=all_child_visits,

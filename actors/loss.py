@@ -69,7 +69,7 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
     K = config.mcts.num_gumbel_samples   # static: K sampled joint actions per MCTS node
     N = config.train.num_agents          # static: number of agents
 
-    def train_step(params, opt_state, batch, weights, rng_key, ema_params, q_data=None):
+    def train_step(params, opt_state, batch, weights, rng_key, ema_params, q_data):
         # Pre-compute categorical support targets outside loss_fn so they
         # are constants w.r.t. the gradient — zero gradient flows through them.
         value_target_dist = scalar_to_support(
@@ -99,7 +99,7 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
             ce_p0 = optax.softmax_cross_entropy(
                 init_out.policy_logits, batch.policy_target[:, 0]
             ).mean(axis=-1)  # (B,)
-            if awpo_alpha > 0.0 and q_data is not None:
+            if awpo_alpha > 0.0:
                 # Action-level AWPO: weight each sampled root action by
                 # exp((Q_k - V_net) / alpha), batch-normalized (_awpo_weight).
                 q_valid       = q_data["all_child_valid"][:, 0]      # (B,) bool — root position
@@ -131,14 +131,10 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                 visit_weights = visits_k / (visits_k.sum(axis=-1, keepdims=True) + 1e-8)
                 action_awpo_loss = -(visit_weights * awpo_w_k * joint_log_prob_k).sum(axis=-1)  # (B,)
 
-                # Fall back to plain CE for items where Q-data was not stored
+                # q_valid masks cold ring-buffer slots that predate this item's
+                # Q-data being written (not a "missing planner" case — the
+                # sole planner always produces Q-data).
                 p0_loss = jnp.where(q_valid, action_awpo_loss, ce_p0)  # (B,)
-            elif awpo_alpha > 0.0:
-                # No Q-data available (e.g. non-OSLA planner): state-level fallback
-                v_mcts = batch.value_target[:, 0].mean(axis=-1)  # (B,)
-                v_net = support_to_scalar(init_out.value_logits, value_support)  # (B,)
-                awpo_w = _awpo_weight(v_mcts, v_net, awpo_alpha)
-                p0_loss = awpo_w * ce_p0  # (B,)
             else:
                 p0_loss = ce_p0  # (B,)
 
@@ -147,19 +143,10 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
             # (h_t, h_{t+k}) for k>1 can reuse the same hidden states.
             if awpo_alpha > 0.0:
                 # Build per-step Q-data for the scan (positions 1..U).
-                # When q_data is None (non-OSLA planner), pass zeros with all-invalid mask
-                # so scan_step always has the same input structure.
-                if q_data is not None:
-                    step_q_acts  = jnp.moveaxis(q_data["all_child_actions"][:, 1:], 1, 0)  # (U, B, K, N)
-                    step_q_q     = jnp.moveaxis(q_data["all_child_q"][:, 1:],       1, 0)  # (U, B, K)
-                    step_q_vis   = jnp.moveaxis(q_data["all_child_visits"][:, 1:],  1, 0)  # (U, B, K)
-                    step_q_valid = jnp.moveaxis(q_data["all_child_valid"][:, 1:],   1, 0)  # (U, B)
-                else:
-                    B_ = batch.observation.shape[0]
-                    step_q_acts  = jnp.zeros((U, B_, K, N), jnp.int32)
-                    step_q_q     = jnp.zeros((U, B_, K),    jnp.float32)
-                    step_q_vis   = jnp.zeros((U, B_, K),    jnp.float32)
-                    step_q_valid = jnp.zeros((U, B_),       jnp.bool_)
+                step_q_acts  = jnp.moveaxis(q_data["all_child_actions"][:, 1:], 1, 0)  # (U, B, K, N)
+                step_q_q     = jnp.moveaxis(q_data["all_child_q"][:, 1:],       1, 0)  # (U, B, K)
+                step_q_vis   = jnp.moveaxis(q_data["all_child_visits"][:, 1:],  1, 0)  # (U, B, K)
+                step_q_valid = jnp.moveaxis(q_data["all_child_valid"][:, 1:],   1, 0)  # (U, B)
 
                 xs = (
                     jnp.moveaxis(batch.actions, 1, 0),

@@ -208,7 +208,7 @@ class LearnerActor:
             # Convert q_data to JAX arrays for device; q_valid mask gates AWPO.
             jax_q_data = {
                 k: jax.device_put(np.asarray(v)) for k, v in q_data.items()
-            } if q_data is not None else None
+            }
             self.params, self.opt_state, transfer_buf, new_priorities = self.train_step(
                 self.params, self.opt_state, jax_batch, jax_weights, train_key,
                 self.ema_params, jax_q_data,

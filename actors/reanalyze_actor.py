@@ -107,7 +107,7 @@ class ReanalyzeActor:
         import jax.numpy as jnp
 
         with self.profiler.time("sample_wait"):
-            indices, observations, _ = ray.get(
+            indices, observations = ray.get(
                 self.replay_buffer.sample_for_reanalysis.remote(
                     self.config.train.reanalyze_batch_size
                 )
@@ -143,12 +143,11 @@ class ReanalyzeActor:
                 np.array(plan_output.policy_targets),
                 np.array(plan_output.root_value),
             )
-            if plan_output.root_child_q is not None:
-                self.replay_buffer.update_root_q.remote(
-                    indices,
-                    np.array(plan_output.root_child_actions),  # (B, K, N)
-                    np.array(plan_output.root_child_q),         # (B, K)
-                    np.array(plan_output.root_child_visits),    # (B, K)
-                )
+            self.replay_buffer.update_root_q.remote(
+                indices,
+                np.array(plan_output.root_child_actions),  # (B, K, N)
+                np.array(plan_output.root_child_q),         # (B, K)
+                np.array(plan_output.root_child_visits),    # (B, K)
+            )
 
 

@@ -466,7 +466,6 @@ def _osla_plan_single(
         joint_action=best_action[None],                              # (1, N)
         policy_targets=marginal_policy,                              # (1, N, A)
         root_value=osla_root_value[None],                           # (1,)
-        agent_order=jnp.arange(N),
         root_child_actions=root_child_actions_per_agent[None],      # (1, K, N)
         root_child_q=child_q[None],                                  # (1, K)
         root_child_visits=root_child_visits[None],                   # (1, K)
@@ -536,7 +535,6 @@ class MCTSJointOSLAPlanner(MCTSPlanner):
             joint_action=results.joint_action.squeeze(1),              # (B, N)
             policy_targets=results.policy_targets.squeeze(1),          # (B, N, A)
             root_value=results.root_value.squeeze(1),                  # (B,)
-            agent_order=results.agent_order[0],                         # (N,) — same for all
             root_child_actions=results.root_child_actions.squeeze(1),  # (B, K, N)
             root_child_q=results.root_child_q.squeeze(1),              # (B, K)
             root_child_visits=results.root_child_visits.squeeze(1),    # (B, K)
