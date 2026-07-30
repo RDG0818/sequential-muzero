@@ -78,11 +78,15 @@ def test_scalar_to_support_default_matches_pre_refactor_hyperbolic_path():
     assert jnp.allclose(dist, expected)
 
 
-def test_scalar_to_support_round_trip_with_symlog_transform():
+def test_support_to_scalar_uses_configured_inv_scale_fn():
+    """support_to_scalar must invert via support.inv_scale_fn. Verified with
+    hand-built confident logits, not by chaining through scalar_to_support —
+    scalar_to_support's two-hot output is only ever used as a cross-entropy
+    target in this codebase; support_to_scalar's input is always real network
+    logits. The two functions are never chained in production."""
     support = DiscreteSupport(min=-5, max=5, scale_fn=symlog, inv_scale_fn=symexp)
-    x = jnp.array([0.0, 1.5, -3.0, 4.0])
-
-    dist = scalar_to_support(x, support)
-    recovered = support_to_scalar(dist, support)
-
-    assert jnp.allclose(recovered, x, atol=0.05)
+    # Confident logits concentrated at the support atom for scaled value 3.0
+    # (index 8 of 11: support.min=-5, so atom value 3 is at index 3-(-5)=8).
+    logits = jnp.full((support.size,), -20.0).at[8].set(20.0)
+    decoded = support_to_scalar(logits, support)
+    assert jnp.allclose(decoded, symexp(jnp.array(3.0)), atol=0.05)

@@ -111,10 +111,8 @@ def support_to_scalar(distribution: jnp.ndarray, support: DiscreteSupport) -> jn
     """
     Decodes a categorical distribution (or logits) back to a scalar value.
 
-    If input is logits, applies softmax to convert to probabilities. If input
-    is already a probability distribution (sums to ~1), uses it directly.
-    Computes the expected value over the support atoms, then inverts via
-    support.inv_scale_fn.
+    Applies softmax to convert logits to probabilities, computes the expected
+    value over the support atoms, then inverts via support.inv_scale_fn.
 
     Args:
         distribution: Logits or probabilities over the support.
@@ -124,13 +122,7 @@ def support_to_scalar(distribution: jnp.ndarray, support: DiscreteSupport) -> jn
     Returns:
         Scalar values. Shape: (*batch_shape,)
     """
-    # Check if input is already a probability distribution (sums to ~1)
-    row_sums = jnp.sum(distribution, axis=-1, keepdims=True)
-    is_prob_dist = jnp.all(jnp.abs(row_sums - 1.0) < 0.1, axis=-1, keepdims=True)
-
-    # Apply softmax only to logits, not to already-normalized distributions
-    probs = jnp.where(is_prob_dist, distribution, jax.nn.softmax(distribution, axis=-1))
-
+    probs = jax.nn.softmax(distribution, axis=-1)
     support_range = jnp.arange(support.min, support.max + 1, dtype=jnp.float32)
     scalar = jnp.sum(probs * jnp.broadcast_to(support_range, probs.shape), axis=-1)
     return support.inv_scale_fn(scalar)
