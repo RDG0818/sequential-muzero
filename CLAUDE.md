@@ -39,10 +39,6 @@ conda create -n mazero python=3.10.18 && conda activate mazero
 pip install -r requirements.txt
 wandb login  # set wandb_mode to "online" in configs/train/default.yaml to enable
 
-# Build C++ replay buffer extension (run once after cloning, or after modifying csrc/)
-pip install pybind11
-python setup.py build_ext --inplace
-
 # Run training
 python train/muzero.py                                  # default config (MPE simple_spread)
 python train/muzero.py train=smax_3m model=smax mcts=joint  # SMAX 3m (primary target)
@@ -61,9 +57,6 @@ python eval.py train.checkpoint_dir=checkpoints  # explicit checkpoint dir
 
 # Run tests
 pytest tests/ -v
-
-# Benchmark C++ vs Python replay buffer
-python benchmarks/replay_buffer_benchmark.py
 ```
 
 Hyperparameters live in `configs/`. Edit the relevant YAML or pass overrides on the CLI — no code changes needed.
@@ -80,16 +73,6 @@ Violating these rules causes silent failures or segfaults that are difficult to 
 ## Package Layout
 
 ```
-csrc/
-  replay_buffer/
-    sum_tree.h            # lock-free atomic sum tree (header-only)
-    pinned_alloc.h        # cudaMallocHost / malloc fallback (header-only)
-    replay_buffer.h/.cpp  # ReplayBuffer C++ class
-    bindings.cpp          # pybind11 module (_replay_buffer_cpp)
-CMakeLists.txt            # builds _replay_buffer_cpp.*.so; CUDA optional
-setup.py                  # python setup.py build_ext --inplace
-benchmarks/
-  replay_buffer_benchmark.py  # C++ vs Python backend perf comparison
 train/
   muzero.py               # entry point (@hydra.main, builds ExperimentConfig, launches Ray actors)
   ippo.py                 # entry point for IPPO baseline (pure JAX, no Ray)
@@ -146,7 +129,7 @@ tests/
   test_model.py
   test_mcts.py
   test_learner.py         # tests for scale_grad_half (forward identity, backward halves grad)
-  test_replay_buffer.py   # comprehensive C++ backend and Python fallback tests
+  test_replay_buffer.py   # cpprb-backed ReplayBuffer + process_episode tests
 ```
 
 ## Architecture
@@ -154,7 +137,7 @@ tests/
 **Training system** (`train/muzero.py` + `actors/` + `training/`): Asynchronous actor-learner pattern using Ray.
 - `LearnerActor` (GPU): runs a self-driving training loop (`run_training_loop(N)`) that executes N steps internally before returning to the main loop. Eliminates Ray round-trip overhead between steps. Prefetches the next batch from the buffer while the GPU trains. EMA update is JIT-compiled to avoid per-leaf kernel launches. `make_train_step` returns a single packed `transfer_buf = jnp.concatenate([metric_scalars, grad_norm, priorities])` so all GPU→CPU data crosses PCIe in one DMA transaction; `_train_step` slices it after `np.array(transfer_buf)`.
 - `DataActor` (CPU, N instances, `@ray.remote(num_cpus=1)`): runs MCTS episodes, ships `ReplayItem`s to the buffer. Syncs params asynchronously (fires `get_params.remote()` at end of episode, resolves at start of next) so the ~300ms transfer overlaps with MCTS compute. Applies observation normalization on CPU before sending to JAX if `use_obs_normalization=True`.
-- `ReplayBufferActor`: wraps `ReplayBuffer` (prioritized experience replay). Uses the C++ backend (`_replay_buffer_cpp`) when built: lock-free ring buffer + sum tree via `std::atomic`, CUDA pinned output buffers so `jax.device_put()` DMA's directly without a pageable copy. Falls back to a pure-Python/cpprb implementation if the `.so` is not present. Build with `python setup.py build_ext --inplace`.
+- `ReplayBufferActor`: wraps `ReplayBuffer` (prioritized experience replay), backed by `cpprb.PrioritizedReplayBuffer`. `jax.device_put()` uses the normal pageable-memory path (the prior C++ backend's CUDA-pinned DMA optimization was removed along with the custom extension — see git history for the swap).
 - `ReanalyzeActor` (CPU, optional, `@ray.remote(num_cpus=2)`): continuously re-runs MCTS on stored observations with the latest params to generate fresher policy/value targets. Updates only position 0 (root) of each stored sequence. Controlled by `num_reanalyze_actors` and `reanalyze_batch_size` in `TrainConfig`.
 - `training/loop.py`: `run_warmup()` fills the buffer; `run_training_loop()` drives learner, data actors, and reanalyze actors asynchronously via `ray.wait`.
 - `utils/profiler.py`: `Profiler` class used in all actors. Reports mean time per named operation every `debug_interval` steps. JAX note: always call `jax.block_until_ready()` inside a `profiler.time()` block to measure actual GPU/CPU compute, not just async dispatch time.
@@ -292,7 +275,7 @@ Items marked **[easy]** are straightforward; **[medium]** require more design wo
 
 ### Utils
 
-- **[done] C++ replay buffer** — lock-free ring buffer + sum tree, CUDA pinned buffers, stratified PER sampling, Vitter's Algorithm R for uniform reanalysis sampling. Pure-Python/cpprb fallback if `.so` not built.
+- **[done→removed 2026-07-29]** the custom C++/CUDA replay buffer was replaced by `cpprb` in the second simplification pass — see `docs/superpowers/specs/2026-07-29-second-simplification-pass-design.md`.
 - **[done] Observation normalization** — `utils/obs_norm.py`: EMA per-feature normalizer, synced to actors via `get_params()`.
 
 ### Model

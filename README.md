@@ -17,7 +17,7 @@ Contact: rdg291@msstate.edu
 
 ~300× throughput gain from three sources:
 1. **JaxMARL environments** — SMAX runs on JAX+JIT vs Python/StarCraft II bindings
-2. **Async actor-learner pipeline** — self-driving learner loop, async param sync, C++ replay buffer
+2. **Async actor-learner pipeline** — self-driving learner loop, async param sync, prioritized replay buffer
 3. **Parallelism** — vectorized environments across multiple CPU actors
 
 ## Results
@@ -39,7 +39,7 @@ Return is sum of negative distances to landmarks per step; closer to 0 is better
 
 **Async actor-learner** (Ray): `LearnerActor` runs N training steps per Ray call to amortize ~100ms scheduling overhead. Parameter syncs are fired at episode end and resolved at episode start, overlapping the ~300ms transfer with MCTS compute. All GPU→CPU metrics pack into a single `jnp.concatenate` for one DMA transaction.
 
-**C++ replay buffer** (`csrc/`): lock-free ring buffer + sum tree via `std::atomic`. Output buffers use `cudaMallocHost` pinned memory so `jax.device_put()` DMA's directly without a pageable copy (~50–200µs saved per step). Stratified PER sampling and Vitter's Algorithm R for uniform reanalysis. Falls back to pure-Python/cpprb if the `.so` is not built.
+**Prioritized replay buffer** (`utils/replay_buffer.py`): backed by `cpprb.PrioritizedReplayBuffer` — stratified PER sampling with alpha/beta annealing, uniform (without-replacement) sampling for reanalysis.
 
 **OS(λ) MCTS** (`mcts/mcts_joint_osla.py`): custom JAX implementation of the MAZero planner. Per-node OS(λ) backup — each node tracks per-simulation values and depths; UCB selection uses quantile-weighted Q-estimates. Vmapped over batch; `jax.lax.fori_loop` over simulations. No mctx dependency for this planner.
 
@@ -50,10 +50,6 @@ Return is sum of negative distances to landmarks per step; closer to 0 is better
 ```bash
 conda create -n mazero python=3.10.18 && conda activate mazero
 pip install -r requirements.txt
-
-# Build C++ replay buffer (optional but recommended)
-pip install pybind11
-python setup.py build_ext --inplace
 ```
 
 ## Usage
