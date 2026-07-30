@@ -72,6 +72,27 @@ def _awpo_weight(q: '_jax.Array', v_baseline: '_jax.Array', alpha: float) -> '_j
     return _jax.numpy.exp(_jax.numpy.clip(adv_norm / alpha, -5.0, 5.0))
 
 
+def unimix_cross_entropy(logits: '_jax.Array', target_probs: '_jax.Array', unimix_ratio: float) -> '_jax.Array':
+    """Cross-entropy against target_probs, with unimix_ratio uniform mass
+    mixed into the predicted distribution before taking the log.
+
+    unimix_ratio=0.0 is exactly optax.softmax_cross_entropy — the smoothing
+    only engages when a config opts in. Reference: DreamerV3's "1% unimix
+    for all categoricals" (Hafner et al., Nature 2025); applied here to the
+    value/reward categorical heads only, not the policy head (this repo
+    already applies Dirichlet noise to the policy at the MCTS root, which
+    covers similar ground on exploration — unimix's distinct contribution
+    here is stabilizing the value/reward heads, not policy exploration).
+    """
+    import optax
+    if unimix_ratio == 0.0:
+        return optax.softmax_cross_entropy(logits, target_probs)
+    probs = _jax.nn.softmax(logits, axis=-1)
+    num_classes = probs.shape[-1]
+    smoothed = (1.0 - unimix_ratio) * probs + unimix_ratio / num_classes
+    return -_jax.numpy.sum(target_probs * _jax.numpy.log(smoothed + 1e-8), axis=-1)
+
+
 def make_train_step(model, optimizer, value_support, reward_support, config: ExperimentConfig):
     """
     Returns a JIT-compiled training step function.
@@ -93,6 +114,7 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
     # Clamp horizon to U so range(U+1-k) is always ≥ 1.
     consistency_horizon = min(int(config.train.consistency_horizon), U)
     awpo_alpha = float(config.train.awpo_alpha)  # 0.0 = disabled
+    unimix_ratio = float(config.model.unimix_ratio)  # 0.0 = disabled
 
     def train_step(params, opt_state, batch, weights, rng_key, ema_params, q_data):
         # Pre-compute categorical support targets outside loss_fn so they
@@ -115,8 +137,8 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
             hidden = init_out.hidden_state  # (B, N, D)
 
             # Centralized value → (B,)
-            v0_loss = optax.softmax_cross_entropy(
-                init_out.value_logits, value_target_dist[:, 0]
+            v0_loss = unimix_cross_entropy(
+                init_out.value_logits, value_target_dist[:, 0], unimix_ratio
             )
 
             # AWPO root policy loss (paper Eq. 10, 14); branch eliminated at
@@ -186,8 +208,8 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                         rngs={"dropout": step_key},
                     )
                     next_hidden = out.hidden_state
-                    ri_loss = optax.softmax_cross_entropy(out.reward_logits, ri_dist)
-                    vi_loss = optax.softmax_cross_entropy(out.value_logits, vi_dist)
+                    ri_loss = unimix_cross_entropy(out.reward_logits, ri_dist, unimix_ratio)
+                    vi_loss = unimix_cross_entropy(out.value_logits, vi_dist, unimix_ratio)
 
                     # AWPO at this unroll step (mirrors root step computation)
                     v_net_step = support_to_scalar(out.value_logits, value_support)  # (B,)
@@ -225,11 +247,11 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
                         rngs={"dropout": step_key},
                     )
                     next_hidden = out.hidden_state
-                    ri_loss = optax.softmax_cross_entropy(out.reward_logits, ri_dist)
+                    ri_loss = unimix_cross_entropy(out.reward_logits, ri_dist, unimix_ratio)
                     pi_loss = optax.softmax_cross_entropy(
                         out.policy_logits, pi_target
                     ).mean(axis=-1)
-                    vi_loss = optax.softmax_cross_entropy(out.value_logits, vi_dist)
+                    vi_loss = unimix_cross_entropy(out.value_logits, vi_dist, unimix_ratio)
                     # next_hidden returned as output so the caller can collect all
                     # hidden states for multi-step consistency.
                     return next_hidden, (ri_loss, pi_loss, vi_loss, next_hidden)

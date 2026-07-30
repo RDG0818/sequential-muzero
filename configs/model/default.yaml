@@ -18,3 +18,7 @@ pred_out: 256
 # Hafner et al., Nature 2025) — see utils/transforms.py. Same role, different
 # curve; symlog is opt-in, not the validated default.
 value_transform: hyperbolic
+# DreamerV3 unimix smoothing on the value/reward categorical losses
+# (Hafner et al., Nature 2025) — see actors/loss.py:unimix_cross_entropy.
+# 0.0 = disabled (default); try ~0.01 for the ablation run.
+unimix_ratio: 0.0

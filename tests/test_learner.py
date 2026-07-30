@@ -153,3 +153,57 @@ def test_awpo_weight_is_scale_invariant():
     assert jnp.allclose(w_small, w_large, atol=1e-4), (
         f"std-normalized weights should be scale-invariant: {w_small} vs {w_large}"
     )
+
+
+def test_unimix_cross_entropy_zero_ratio_matches_optax_exactly():
+    """unimix_ratio=0.0 must be byte-for-byte optax.softmax_cross_entropy —
+    this is the 'disabled' default and must carry zero behavior change."""
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    import optax
+    from actors.loss import unimix_cross_entropy
+
+    rng = jax.random.PRNGKey(0)
+    logits = jax.random.normal(rng, (4, 10))
+    target = jax.nn.one_hot(jnp.array([2, 5, 0, 9]), 10)
+
+    result = unimix_cross_entropy(logits, target, 0.0)
+    expected = optax.softmax_cross_entropy(logits, target)
+
+    assert jnp.allclose(result, expected)
+
+
+def test_unimix_cross_entropy_smooths_overconfident_predictions():
+    """With a nonzero ratio, a near-one-hot prediction that exactly matches
+    the target should incur *higher* loss than at ratio=0 — the uniform
+    floor prevents the loss from ever reaching zero, which is the point
+    (DreamerV3's stability argument)."""
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    from actors.loss import unimix_cross_entropy
+
+    confident_logits = jnp.array([[20.0, -20.0, -20.0]])  # ~one-hot at class 0
+    target = jax.nn.one_hot(jnp.array([0]), 3)
+
+    loss_disabled = unimix_cross_entropy(confident_logits, target, 0.0)
+    loss_smoothed = unimix_cross_entropy(confident_logits, target, 0.01)
+
+    assert float(loss_smoothed[0]) > float(loss_disabled[0])
+
+
+def test_unimix_cross_entropy_matches_manual_smoothing_formula():
+    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    from actors.loss import unimix_cross_entropy
+
+    logits = jnp.array([[1.0, 2.0, 3.0]])
+    target = jnp.array([[0.0, 0.0, 1.0]])
+    ratio = 0.1
+
+    result = unimix_cross_entropy(logits, target, ratio)
+
+    probs = jax.nn.softmax(logits, axis=-1)
+    smoothed = (1.0 - ratio) * probs + ratio / 3
+    expected = -jnp.sum(target * jnp.log(smoothed + 1e-8), axis=-1)
+
+    assert jnp.allclose(result, expected, atol=1e-5)

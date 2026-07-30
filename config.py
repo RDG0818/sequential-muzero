@@ -24,6 +24,7 @@ class ModelConfig:
     pred_hid: int
     pred_out: int
     value_transform: str = "hyperbolic"  # "hyperbolic" (MuZero paper) or "symlog" (DreamerV3)
+    unimix_ratio: float = 0.0  # DreamerV3 unimix smoothing on value/reward CE; 0.0 = disabled
 
 
 @dataclass(frozen=True)
