@@ -51,3 +51,38 @@ def test_get_value_transform_fns_symlog():
 def test_get_value_transform_fns_unknown_name_raises():
     with pytest.raises(ValueError):
         get_value_transform_fns("nonexistent")
+
+
+def test_discrete_support_defaults_to_hyperbolic_scale():
+    support = DiscreteSupport(min=-5, max=5)
+    assert support.scale_fn is muzero_scale
+    assert support.inv_scale_fn is muzero_scale_inv
+
+
+def test_scalar_to_support_default_matches_pre_refactor_hyperbolic_path():
+    """Regression guard: byte-for-byte match against the old hardcoded
+    muzero_scale call path this refactor replaces."""
+    support = DiscreteSupport(min=-5, max=5)
+    x = jnp.array([0.3, -2.0, 4.9])
+
+    dist = scalar_to_support(x, support)
+
+    scaled = jnp.clip(muzero_scale(x), support.min, support.max)
+    floor = jnp.floor(scaled).astype(jnp.int32)
+    ceil = jnp.ceil(scaled).astype(jnp.int32)
+    prob = scaled - floor
+    floor_oh = jax.nn.one_hot((floor - support.min).astype(jnp.int32), support.size)
+    ceil_oh = jax.nn.one_hot((ceil - support.min).astype(jnp.int32), support.size)
+    expected = floor_oh * (1 - prob)[..., None] + ceil_oh * prob[..., None]
+
+    assert jnp.allclose(dist, expected)
+
+
+def test_scalar_to_support_round_trip_with_symlog_transform():
+    support = DiscreteSupport(min=-5, max=5, scale_fn=symlog, inv_scale_fn=symexp)
+    x = jnp.array([0.0, 1.5, -3.0, 4.0])
+
+    dist = scalar_to_support(x, support)
+    recovered = support_to_scalar(dist, support)
+
+    assert jnp.allclose(recovered, x, atol=0.05)

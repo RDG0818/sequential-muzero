@@ -4,16 +4,6 @@ import jax.numpy as jnp
 from typing import Callable, NamedTuple, Tuple
 
 
-class DiscreteSupport(NamedTuple):
-    """Discrete support for categorical value/reward distributions."""
-    min: int
-    max: int
-
-    @property
-    def size(self) -> int:
-        return self.max - self.min + 1
-
-
 def muzero_scale(x: jnp.ndarray, epsilon: float = 1e-3) -> jnp.ndarray:
     """
     MuZero value scaling function — reduces the scale of large rewards/values
@@ -51,6 +41,18 @@ def symexp(x: jnp.ndarray) -> jnp.ndarray:
     return jnp.sign(x) * jnp.expm1(jnp.abs(x))
 
 
+class DiscreteSupport(NamedTuple):
+    """Discrete support for categorical value/reward distributions."""
+    min: int
+    max: int
+    scale_fn: Callable = muzero_scale
+    inv_scale_fn: Callable = muzero_scale_inv
+
+    @property
+    def size(self) -> int:
+        return self.max - self.min + 1
+
+
 _VALUE_TRANSFORMS = {
     "hyperbolic": (muzero_scale, muzero_scale_inv),
     "symlog": (symlog, symexp),
@@ -79,17 +81,17 @@ def scalar_to_support(scalar: jnp.ndarray, support: DiscreteSupport) -> jnp.ndar
     """
     Encodes a scalar value into a two-hot categorical distribution over the support.
 
-    Applies muzero_scale first, then distributes probability mass between the
-    two nearest support atoms via linear interpolation.
+    Applies support.scale_fn first, then distributes probability mass between
+    the two nearest support atoms via linear interpolation.
 
     Args:
         scalar: Scalar values to encode. Any shape.
-        support: DiscreteSupport defining the range.
+        support: DiscreteSupport defining the range and scale transform.
 
     Returns:
         Categorical distribution. Shape: (*scalar.shape, support.size)
     """
-    scaled_scalar = muzero_scale(scalar)
+    scaled_scalar = support.scale_fn(scalar)
     clipped_scalar = jnp.clip(scaled_scalar, support.min, support.max)
 
     floor = jnp.floor(clipped_scalar).astype(jnp.int32)
@@ -109,18 +111,26 @@ def support_to_scalar(distribution: jnp.ndarray, support: DiscreteSupport) -> jn
     """
     Decodes a categorical distribution (or logits) back to a scalar value.
 
-    Applies softmax to convert logits to probabilities, computes the expected
-    value over the support atoms, then inverts the muzero_scale transform.
+    If input is logits, applies softmax to convert to probabilities. If input
+    is already a probability distribution (sums to ~1), uses it directly.
+    Computes the expected value over the support atoms, then inverts via
+    support.inv_scale_fn.
 
     Args:
         distribution: Logits or probabilities over the support.
                       Shape: (*batch_shape, support.size)
-        support: DiscreteSupport defining the range.
+        support: DiscreteSupport defining the range and scale transform.
 
     Returns:
         Scalar values. Shape: (*batch_shape,)
     """
-    probs = jax.nn.softmax(distribution, axis=-1)
+    # Check if input is already a probability distribution (sums to ~1)
+    row_sums = jnp.sum(distribution, axis=-1, keepdims=True)
+    is_prob_dist = jnp.all(jnp.abs(row_sums - 1.0) < 0.1, axis=-1, keepdims=True)
+
+    # Apply softmax only to logits, not to already-normalized distributions
+    probs = jnp.where(is_prob_dist, distribution, jax.nn.softmax(distribution, axis=-1))
+
     support_range = jnp.arange(support.min, support.max + 1, dtype=jnp.float32)
     scalar = jnp.sum(probs * jnp.broadcast_to(support_range, probs.shape), axis=-1)
-    return muzero_scale_inv(scalar)
+    return support.inv_scale_fn(scalar)
