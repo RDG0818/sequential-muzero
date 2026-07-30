@@ -1,7 +1,7 @@
 # utils/transforms.py
 import jax
 import jax.numpy as jnp
-from typing import NamedTuple
+from typing import Callable, NamedTuple, Tuple
 
 
 class DiscreteSupport(NamedTuple):
@@ -32,6 +32,47 @@ def muzero_scale_inv(x: jnp.ndarray, epsilon: float = 1e-3) -> jnp.ndarray:
     denominator = 2 * epsilon
     squared_term = (numerator / denominator) ** 2
     return sign * (squared_term - 1)
+
+
+def symlog(x: jnp.ndarray) -> jnp.ndarray:
+    """
+    DreamerV3 value/reward transform — alternative to muzero_scale.
+
+    symlog(x) = sign(x) * ln(|x| + 1). Same role as muzero_scale (compress
+    large magnitudes before feeding a categorical support), different curve.
+    Reference: Hafner et al., "Mastering Diverse Domains through World
+    Models," Nature 2025 (arXiv:2301.04104).
+    """
+    return jnp.sign(x) * jnp.log1p(jnp.abs(x))
+
+
+def symexp(x: jnp.ndarray) -> jnp.ndarray:
+    """Inverse of symlog."""
+    return jnp.sign(x) * jnp.expm1(jnp.abs(x))
+
+
+_VALUE_TRANSFORMS = {
+    "hyperbolic": (muzero_scale, muzero_scale_inv),
+    "symlog": (symlog, symexp),
+}
+
+
+def get_value_transform_fns(name: str) -> Tuple[Callable, Callable]:
+    """
+    Selects the (scale_fn, inv_scale_fn) pair for a DiscreteSupport by name.
+
+    "hyperbolic" is the original MuZero paper's transform (Pohlen et al.
+    2018, the repo default). "symlog" is DreamerV3's transform (see symlog
+    docstring) — same role, different curve, opt-in via
+    ModelConfig.value_transform.
+    """
+    try:
+        return _VALUE_TRANSFORMS[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown value_transform {name!r}; expected one of "
+            f"{list(_VALUE_TRANSFORMS)}"
+        ) from None
 
 
 def scalar_to_support(scalar: jnp.ndarray, support: DiscreteSupport) -> jnp.ndarray:
