@@ -107,6 +107,25 @@ def model_and_params(test_config):
     return net, params
 
 
+def test_planner_uses_configured_value_transform(model_and_params, test_config):
+    import dataclasses
+    from mcts.mcts_joint_osla import MCTSJointOSLAPlanner
+    from utils.transforms import symlog, symexp, muzero_scale, muzero_scale_inv
+
+    net, _ = model_and_params
+
+    default_planner = MCTSJointOSLAPlanner(model=net, config=test_config)
+    assert default_planner.value_support.scale_fn is muzero_scale
+    assert default_planner.reward_support.inv_scale_fn is muzero_scale_inv
+
+    symlog_config = dataclasses.replace(
+        test_config, model=dataclasses.replace(test_config.model, value_transform="symlog")
+    )
+    symlog_planner = MCTSJointOSLAPlanner(model=net, config=symlog_config)
+    assert symlog_planner.value_support.scale_fn is symlog
+    assert symlog_planner.reward_support.inv_scale_fn is symexp
+
+
 @pytest.fixture(scope="module")
 def osla_plan_fn(model_and_params, test_config):
     """JIT-compiled plan function for MCTSJointOSLAPlanner."""

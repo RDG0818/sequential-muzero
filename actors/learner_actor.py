@@ -34,7 +34,7 @@ class LearnerActor:
         import optax
         import orbax.checkpoint as ocp
         from pathlib import Path
-        from utils.transforms import DiscreteSupport
+        from utils.transforms import DiscreteSupport, get_value_transform_fns
         from model import FlaxMAMuZeroNet
 
         self.config = config
@@ -65,13 +65,18 @@ class LearnerActor:
         self.train_step_count = 0
         self.rng_key = jax.random.PRNGKey(0)
 
+        scale_fn, inv_scale_fn = get_value_transform_fns(config.model.value_transform)
         value_support = DiscreteSupport(
             min=-config.model.value_support_size,
             max=config.model.value_support_size,
+            scale_fn=scale_fn,
+            inv_scale_fn=inv_scale_fn,
         )
         reward_support = DiscreteSupport(
             min=-config.model.reward_support_size,
             max=config.model.reward_support_size,
+            scale_fn=scale_fn,
+            inv_scale_fn=inv_scale_fn,
         )
 
         model = FlaxMAMuZeroNet(config.model, action_size)

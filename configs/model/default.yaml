@@ -14,3 +14,7 @@ proj_hid: 256
 proj_out: 256
 pred_hid: 64
 pred_out: 256
+# "hyperbolic" (MuZero paper, Pohlen et al. 2018) or "symlog" (DreamerV3,
+# Hafner et al., Nature 2025) — see utils/transforms.py. Same role, different
+# curve; symlog is opt-in, not the validated default.
+value_transform: hyperbolic

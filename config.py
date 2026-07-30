@@ -23,6 +23,7 @@ class ModelConfig:
     proj_out: int
     pred_hid: int
     pred_out: int
+    value_transform: str = "hyperbolic"  # "hyperbolic" (MuZero paper) or "symlog" (DreamerV3)
 
 
 @dataclass(frozen=True)

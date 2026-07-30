@@ -24,7 +24,7 @@ from mcts.osla_math import (
     DIRICHLET_ALPHA,
     DIRICHLET_FRACTION,
 )
-from utils.transforms import DiscreteSupport
+from utils.transforms import DiscreteSupport, get_value_transform_fns
 
 
 # ─── Local replacement for mctx.RecurrentFnOutput ───────────────────────────
@@ -507,13 +507,18 @@ class MCTSJointOSLAPlanner:
         self.num_sampled_actions = config.mcts.num_sampled_actions
         self.discount_gamma = config.train.discount_gamma
 
+        scale_fn, inv_scale_fn = get_value_transform_fns(config.model.value_transform)
         self.value_support = DiscreteSupport(
             min=-config.model.value_support_size,
             max=config.model.value_support_size,
+            scale_fn=scale_fn,
+            inv_scale_fn=inv_scale_fn,
         )
         self.reward_support = DiscreteSupport(
             min=-config.model.reward_support_size,
             max=config.model.reward_support_size,
+            scale_fn=scale_fn,
+            inv_scale_fn=inv_scale_fn,
         )
 
         self.joint_action_shape: tuple = (self.action_space_size,) * self.num_agents
