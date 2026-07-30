@@ -45,7 +45,7 @@ class ReplayItem:
 
     Shapes (using shorthand):
         B = batch_size, U = unroll_steps, N = num_agents, A = action_space_size,
-        K = num_gumbel_samples
+        K = num_sampled_actions
     """
     observation: np.ndarray    # (B, N, obs_size)
     actions: np.ndarray        # (B, U, N)

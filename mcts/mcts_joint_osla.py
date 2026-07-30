@@ -45,7 +45,7 @@ class OSLATree:
     """Static-shaped search tree for one environment instance (no batch dim).
 
     max_nodes = num_simulations + 1 (root + 1 new leaf per simulation).
-    K = num_gumbel_samples (sampled joint actions per node).
+    K = num_sampled_actions (sampled joint actions per node).
     """
     visit_counts:     chex.Array  # [max_nodes] int32
     value_sum:        chex.Array  # [max_nodes] float32
@@ -316,7 +316,7 @@ def _osla_plan_single(
     observation: chex.Array,          # [N, obs_size]
     model,
     num_simulations: int,             # static
-    K: int,                           # static (num_gumbel_samples)
+    K: int,                           # static (num_sampled_actions)
     A_N: int,                         # static (action_space_size^num_agents)
     max_depth: int,                   # static
     gamma: float,
@@ -503,8 +503,8 @@ class MCTSJointOSLAPlanner:
         self.action_space_size = model.action_space_size
 
         self.num_simulations = config.mcts.num_simulations
-        self.max_depth_gumbel_search = config.mcts.max_depth_gumbel_search
-        self.num_gumbel_samples = config.mcts.num_gumbel_samples
+        self.max_search_depth = config.mcts.max_search_depth
+        self.num_sampled_actions = config.mcts.num_sampled_actions
         self.discount_gamma = config.train.discount_gamma
 
         self.value_support = DiscreteSupport(
@@ -539,9 +539,9 @@ class MCTSJointOSLAPlanner:
             _osla_plan_single,
             model=self.model,
             num_simulations=self.num_simulations,
-            K=self.num_gumbel_samples,
+            K=self.num_sampled_actions,
             A_N=self.A_N,
-            max_depth=self.max_depth_gumbel_search,
+            max_depth=self.max_search_depth,
             gamma=self.discount_gamma,
             rho=self.mcts_rho,
             lam=self.mcts_lambda,

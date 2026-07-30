@@ -88,9 +88,9 @@ def test_config():
             pred_out=16,
         ),
         mcts=MCTSConfig(
-            num_simulations=8,           # minimum viable for gumbel (>= num_gumbel_samples)
-            max_depth_gumbel_search=3,
-            num_gumbel_samples=4,
+            num_simulations=8,           # minimum viable for gumbel (>= num_sampled_actions)
+            max_search_depth=3,
+            num_sampled_actions=4,
             mcts_rho=0.75,
             mcts_lambda=0.8,
         ),
@@ -134,8 +134,8 @@ def test_mcts_config_has_osla_fields():
     from config import MCTSConfig
     cfg = MCTSConfig(
         num_simulations=8,
-        max_depth_gumbel_search=3,
-        num_gumbel_samples=4,
+        max_search_depth=3,
+        num_sampled_actions=4,
         mcts_rho=0.75,
         mcts_lambda=0.8,
     )

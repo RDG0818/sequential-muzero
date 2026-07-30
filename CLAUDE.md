@@ -192,7 +192,7 @@ The paper codebase this repo is partially based on. Key facts for understanding 
 
 ```
 num_simulations: 100    # N; our mcts/default.yaml uses 100, joint.yaml uses 50
-sampled_action_times: 10  # K (joint actions sampled per node); our num_gumbel_samples=5 for SMAX
+sampled_action_times: 10  # K (joint actions sampled per node); our num_sampled_actions=5 for SMAX
 mcts_rho: 0.25          # keep top 75% (1 - rho) of simulations — matches our config
 mcts_lambda: 0.8        # depth discount — matches our config
 batch_size: 256         # we use 2048
@@ -254,7 +254,7 @@ Items marked **[easy]** are straightforward; **[medium]** require more design wo
 
 - **[medium] Sequential MCTS (proper implementation)** — agents search in order, each conditioning on the committed actions of prior agents. The key design question is what to put in `coordination_info`: either the prior agents' selected actions (concatenated into the latent) or a communication vector from the prior agents' MCTS trees.
 
-- **[medium] Temperature annealing** — `num_gumbel_samples` (K, the number of joint actions sampled per node in `MCTSJointOSLAPlanner`) acts like temperature. Anneal it down over training (high early for exploration, low late for exploitation). Currently fixed for the whole run.
+- **[medium] Temperature annealing** — `num_sampled_actions` (K, the number of joint actions sampled per node in `MCTSJointOSLAPlanner`) acts like temperature. Anneal it down over training (high early for exploration, low late for exploitation). Currently fixed for the whole run.
 
 - **[medium] Factored policy targets** — for `MCTSJointOSLAPlanner`, the current marginal extraction (summing over other agents' axes) discards coordination information. An alternative: keep the full joint policy as the target and train with a factored policy head that explicitly models correlations.
 

@@ -28,7 +28,7 @@ class ReplayBufferActor:
         # Indexed by ring-buffer position (add_counter % capacity).
         # Used by the learner for action-level AWPO at every unroll step.
         cap = config.train.replay_buffer_size
-        K   = config.mcts.num_gumbel_samples
+        K   = config.mcts.num_sampled_actions
         N   = config.train.num_agents
         U   = config.train.unroll_steps
         self._q_actions = np.zeros((cap, U + 1, K, N), dtype=np.int32)

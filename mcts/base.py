@@ -8,7 +8,7 @@ import chex
 class MCTSPlanOutput(NamedTuple):
     """Output of MCTSJointOSLAPlanner for a single planning step.
 
-    Shapes (B=batch/envs, N=agents, A=actions, K=num_gumbel_samples):
+    Shapes (B=batch/envs, N=agents, A=actions, K=num_sampled_actions):
         joint_action:       (B, N)    — chosen action index per agent
         policy_targets:     (B, N, A) — MCTS-improved policy targets for training
         root_value:         (B,)      — estimated value of the root state

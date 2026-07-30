@@ -1,5 +1,5 @@
 num_simulations: 100
-max_depth_gumbel_search: 10
-num_gumbel_samples: 10
+max_search_depth: 10
+num_sampled_actions: 10
 mcts_rho: 0.25
 mcts_lambda: 0.8

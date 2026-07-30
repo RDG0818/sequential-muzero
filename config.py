@@ -29,8 +29,8 @@ class ModelConfig:
 class MCTSConfig:
     """Hyperparameters for the MCTS planner."""
     num_simulations: int
-    max_depth_gumbel_search: int
-    num_gumbel_samples: int
+    max_search_depth: int
+    num_sampled_actions: int
     mcts_rho: float = 0.25    # OS(λ): top quantile fraction to DISCARD (1-rho is the fraction kept)
     mcts_lambda: float = 0.8  # OS(λ): depth discount weight (lambda^depth)
 

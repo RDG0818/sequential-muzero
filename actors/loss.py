@@ -66,7 +66,7 @@ def make_train_step(model, optimizer, value_support, reward_support, config: Exp
     # Clamp horizon to U so range(U+1-k) is always ≥ 1.
     consistency_horizon = min(int(config.train.consistency_horizon), U)
     awpo_alpha = float(config.train.awpo_alpha)  # 0.0 = disabled
-    K = config.mcts.num_gumbel_samples   # static: K sampled joint actions per MCTS node
+    K = config.mcts.num_sampled_actions  # static: K sampled joint actions per MCTS node
     N = config.train.num_agents          # static: number of agents
 
     def train_step(params, opt_state, batch, weights, rng_key, ema_params, q_data):
