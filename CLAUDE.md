@@ -90,7 +90,7 @@ actors/
   reanalyze_actor.py      # ReanalyzeActor (CPU, num_cpus=2): re-runs MCTS to freshen targets
   replay_buffer_actor.py  # ReplayBufferActor (wraps ReplayBuffer)
 training/
-  loop.py                 # run_warmup(), run_training_loop(), run_training_loop_sync()
+  loop.py                 # run_warmup(), run_training_loop()
 model/
   model.py                # FlaxMAMuZeroNet and sub-networks
   attention.py            # TransformerAttentionEncoder

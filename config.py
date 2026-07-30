@@ -72,7 +72,6 @@ class TrainConfig:
     checkpoint_dir: str
     checkpoint_interval: int
     num_envs_per_actor: int
-    sync: bool
     ema_decay: float
     num_reanalyze_actors: int
     reanalyze_batch_size: int

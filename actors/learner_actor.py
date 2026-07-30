@@ -293,10 +293,6 @@ class LearnerActor:
                 metrics = result
         return metrics  # last non-None metrics, or None if buffer was empty
 
-    # Keep a single-step entry point for the sync training loop.
-    def train(self):
-        return self._train_step()
-
     def _save_checkpoint(self):
         import orbax.checkpoint as ocp
         state = {

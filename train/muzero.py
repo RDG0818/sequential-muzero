@@ -32,7 +32,7 @@ from omegaconf import DictConfig, OmegaConf
 from config import ExperimentConfig, ModelConfig, MCTSConfig, TrainConfig
 from utils.logging_utils import logger
 from actors import ReplayBufferActor, LearnerActor, DataActor, ReanalyzeActor
-from training import run_warmup, run_training_loop, run_training_loop_sync
+from training import run_warmup, run_training_loop
 
 
 @ray.remote
@@ -99,10 +99,7 @@ def main(cfg: DictConfig):
     ray.get([actor.run_episode.remote() for actor in data_actors])
 
     actor_tasks = run_warmup(data_actors, replay_buffer, config)
-    if config.train.sync:
-        run_training_loop_sync(learner, data_actors, replay_buffer, actor_tasks, config)
-    else:
-        run_training_loop(learner, data_actors, replay_buffer, actor_tasks, config, reanalyze_actors=reanalyze_actors)
+    run_training_loop(learner, data_actors, replay_buffer, actor_tasks, config, reanalyze_actors=reanalyze_actors)
 
     if config.train.wandb_mode != "disabled":
         import wandb

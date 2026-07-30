@@ -63,7 +63,6 @@ def test_config():
             checkpoint_dir="checkpoints",
             checkpoint_interval=100,
             num_envs_per_actor=1,
-            sync=True,
             ema_decay=0.999,
             num_reanalyze_actors=0,
             reanalyze_batch_size=32,
