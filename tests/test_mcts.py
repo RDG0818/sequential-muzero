@@ -35,7 +35,7 @@ def test_config():
     """Minimal config designed for fast test execution."""
     return ExperimentConfig(
         train=TrainConfig(
-            env_name="MPE_simple_spread_v3",
+            env_name="3m",
             num_agents=N,
             num_episodes=100,
             warmup_episodes=10,

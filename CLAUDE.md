@@ -15,11 +15,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 Primary scenario: **SMAX 3m** (3 allies vs 3 scripted marines, JaxMARL HeuristicEnemySMAX).
 
 ```bash
-python train/muzero.py train=smax_3m model=smax mcts=joint
+python train/muzero.py model=smax mcts=joint
 ```
 
 Key config group files:
-- `configs/train/smax_3m.yaml` — episode/buffer/actor counts; sets `awpo_alpha=1.0`, `n_step=5`
+- `configs/train/default.yaml` — the SMAX 3m preset (only train preset); sets episode/buffer/actor counts, `awpo_alpha=2.0`, `n_step=5`
 - `configs/model/smax.yaml` — 2-layer [128,128] nets, 3-layer 8-head attention, value support [-5,5]
 - `configs/mcts/joint.yaml` — MCTSJointOSLAPlanner, 50 sims, rho=0.25, K=5
 
@@ -39,15 +39,11 @@ pip install -r requirements.txt
 wandb login  # set wandb_mode to "online" in configs/train/default.yaml to enable
 
 # Run training
-python train/muzero.py                                  # default config (MPE simple_spread)
-python train/muzero.py train=smax_3m model=smax mcts=joint  # SMAX 3m (primary target)
+python train/muzero.py                                  # default config (SMAX 3m)
+python train/muzero.py model=smax mcts=joint             # SMAX 3m (primary target)
 python train/muzero.py mcts=joint                       # lighter 50-sim preset (default is 100-sim mcts/default.yaml; planner is joint either way)
 python train/muzero.py train.num_episodes=50000         # override single value
 python train/muzero.py train.batch_size=128 mcts.num_simulations=50
-
-# Run baselines
-python train/ippo.py
-python train/mappo.py
 
 # Evaluate a checkpoint
 python eval.py                                   # latest checkpoint, default config
@@ -74,8 +70,6 @@ Violating these rules causes silent failures or segfaults that are difficult to 
 ```
 train/
   muzero.py               # entry point (@hydra.main, builds ExperimentConfig, launches Ray actors)
-  ippo.py                 # entry point for IPPO baseline (pure JAX, no Ray)
-  mappo.py                # entry point for MAPPO baseline (pure JAX, no Ray)
 eval.py                   # standalone eval: loads checkpoint, runs N MCTS episodes, logs return
 conftest.py               # pytest: adds project root to sys.path
 config.py                 # dataclasses only: ModelConfig, MCTSConfig, TrainConfig, ExperimentConfig
@@ -88,21 +82,13 @@ configs/
     default.yaml          # MCTS hyperparameters (base defaults; joint planner)
     joint.yaml            # joint planner preset (50 sims, rho=0.25, K=5)
   train/
-    default.yaml          # training hyperparameters (MPE defaults)
-    smax_3m.yaml          # SMAX 3m overrides: lr=1e-4, n_step=5, awpo_alpha=1.0, buf=500k
-  baseline/
-    ippo.yaml             # IPPO hyperparameters
-    mappo.yaml            # MAPPO hyperparameters
+    default.yaml          # SMAX 3m training hyperparameters (the only train preset)
 actors/
   learner_actor.py        # LearnerActor (GPU): training loop, param sync, checkpointing
   loss.py                 # make_train_step factory, scale_grad_half, _awpo_weight — pure JAX, no Ray
   data_actor.py           # DataActor (CPU, num_cpus=1)
   reanalyze_actor.py      # ReanalyzeActor (CPU, num_cpus=2): re-runs MCTS to freshen targets
   replay_buffer_actor.py  # ReplayBufferActor (wraps ReplayBuffer)
-baselines/
-  networks.py             # ActorCritic + CentralizedCritic Flax modules (shared params)
-  ippo.py                 # IPPO: GAE + PPO clip, decentralized actor + decentralized critic
-  mappo.py                # MAPPO: GAE + PPO clip, decentralized actor + centralized critic
 training/
   loop.py                 # run_warmup(), run_training_loop(), run_training_loop_sync()
 model/
@@ -115,7 +101,6 @@ mcts/
   mcts_joint_osla.py      # MCTSJointOSLAPlanner — custom JAX MCTS with OS(λ) per-node backup
 envs/
   __init__.py             # make_env_wrapper / make_vec_env_wrapper factory functions
-  mpe_env_wrapper.py      # MPEEnvWrapper + VecMPEEnvWrapper (JaxMARL MPE)
   smax_env_wrapper.py     # SMAXEnvWrapper + VecSMAXEnvWrapper (JaxMARL HeuristicEnemySMAX)
 utils/
   obs_norm.py             # ObsRunningNorm — EMA per-feature observation normalizer
@@ -174,7 +159,7 @@ Notable config fields added since original docs:
 - `make_env_wrapper(env_name, num_agents, max_steps)` — single-env wrapper
 - `make_vec_env_wrapper(env_name, num_agents, max_steps, num_envs)` — vectorized wrapper
 
-Routing: env names starting with `"MPE_"` → MPE wrappers; anything else (e.g. `"3m"`, `"2s3z"`) → SMAX wrappers.
+SMAX-only: `env_name` is a JaxMARL SMAX scenario string (e.g. `"3m"`, `"2s3z"`, `"8m"`).
 
 `envs/smax_env_wrapper.py`: fully implemented (not a stub). `SMAXEnvWrapper` and `VecSMAXEnvWrapper` wrap `HeuristicEnemySMAX`. Key subtleties:
 - Team reward = one ally's reward (not sum), to avoid overcounting by N.
@@ -194,17 +179,6 @@ Any new environment wrapper must expose:
 - State is plain numpy (`{mean, var, initialized}`) so it can be serialized into `get_params()` and applied on CPU in DataActor/ReanalyzeActor without triggering JAX.
 - Enabled by `use_obs_normalization: true` in model config (default `false`).
 - Checkpoint save/restore includes `obs_norm_mean` and `obs_norm_var` when enabled.
-
-## Baselines
-
-IPPO and MAPPO are on-policy baselines implemented in pure JAX (no Ray). Key design choices:
-- **Parameter sharing**: all agents share one network; agent one-hot ID is appended to obs
-- **Vectorized rollout**: `jax.lax.scan` over T timesteps across B parallel envs simultaneously
-- **No replay buffer**: on-policy — data collected each iteration is used once then discarded
-- **Team reward**: summed reward across all agents (cooperative setting)
-- **MAPPO centralized critic**: global state = concatenation of all agent observations `(B, N*obs_size)`
-
-JaxMARL does **not** ship IPPO/MAPPO implementations — only environment wrappers and utilities. The `CTRolloutManager` in `jaxmarl.wrappers.baselines` provides centralized training utilities but is not used here (we implement rollout collection directly via scan).
 
 ## MAZero Reference Implementation (`../MAZero/`)
 

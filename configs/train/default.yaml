@@ -1,35 +1,45 @@
-env_name: MPE_simple_spread_v3
+# SMAX 3m scenario: 3 allies vs 3 scripted marine enemies.
+# Usage: python train/muzero.py model=smax mcts=joint
+#
+# Hyperparameters aligned with MAZero paper (SMAC settings).
+#
+# Other scenarios: change env_name/num_agents/max_episode_steps, e.g.
+#   8m:    num_agents=8, max_episode_steps=120
+#   2s3z:  num_agents=5, max_episode_steps=150
+#   3s5z:  num_agents=8, max_episode_steps=150
+
+env_name: 3m
 num_agents: 3
 num_episodes: 100000
-warmup_episodes: 1000
+warmup_episodes: 50
 log_interval: 100
-num_actors: 6
-max_episode_steps: 25
-replay_buffer_size: 100000
+num_actors: 3
+max_episode_steps: 100  # JaxMARL HeuristicEnemySMAX 3m terminates at 100 steps
+replay_buffer_size: 500000  # 100k overwrites good episodes too fast (~30min to full refresh)
 replay_buffer_alpha: 0.6
 replay_buffer_beta_start: 0.4
 replay_buffer_beta_frames: 100000
 batch_size: 256
-learning_rate: 3e-4
+learning_rate: 5e-4      # paper uses 5e-4 constant
 param_update_interval: 100
-end_lr_factor: 0.1
-lr_warmup_steps: 5000
+end_lr_factor: 1.0       # no decay (1.0 = constant LR)
+lr_warmup_steps: 0       # no warmup; paper uses constant LR
 value_scale: 0.25
 consistency_scale: 1.0
-consistency_horizon: 1   # SPR multi-step horizon (1 = original k=1 only, 3 = k=1,2,3)
+consistency_horizon: 1   # SPR multi-step horizon (1 = original k=1 only)
 gradient_clip_norm: 5.0
 unroll_steps: 5
-n_step: 10
+n_step: 5                # paper uses 5; 10 causes NaN on sparse SMAX rewards
 discount_gamma: 0.99
 wandb_mode: disabled  # "online" or "disabled"
 project_name: myzero1
 checkpoint_dir: checkpoints
 checkpoint_interval: 2500
-num_envs_per_actor: 4  # parallel environments per DataActor
+num_envs_per_actor: 4  # 3 actors x 4 envs = 12 parallel envs
 sync: false            # use synchronous training loop (simpler but ~2-3x slower)
 ema_decay: 0.999       # EMA decay for target encoder (BYOL-style consistency loss)
-num_reanalyze_actors: 1
-reanalyze_batch_size: 256
+num_reanalyze_actors: 1  # more starves data actors on a 12-core machine
+reanalyze_batch_size: 64
 debug: false
 debug_interval: 100  # emit detailed debug logs every N learner training steps
-awpo_alpha: 0.0      # AWPO temperature; 0.0 = disabled (plain BC loss)
+awpo_alpha: 2.0      # AWPO advantage temperature (MAZero awac_lambda=2)

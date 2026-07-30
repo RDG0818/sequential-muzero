@@ -2,7 +2,7 @@
 # Matches MAZero paper SMAC architecture: deeper networks, 3-layer 8-head attention,
 # tighter value/reward support for sparse win/loss rewards.
 #
-# Usage: python train/muzero.py train=smax_3m model=smax mcts=joint
+# Usage: python train/muzero.py model=smax mcts=joint
 
 defaults:
   - default

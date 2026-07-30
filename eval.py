@@ -2,7 +2,7 @@
 Standalone evaluation script for a trained MuZero checkpoint.
 
 Loads a checkpoint, runs N episodes with MCTS (no gradient updates), and
-reports mean ± std episode return. For SMAC environments also reports win rate.
+reports mean ± std episode return. Also reports win rate.
 
 Usage:
   python eval.py                                       # default config + latest checkpoint
@@ -30,7 +30,7 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
     Runs `num_episodes` evaluation episodes in a Ray task (keeps JAX off the
     main process, same pattern as DataActor and _fetch_env_metadata).
 
-    Returns (returns, wins, ckpt_step) where wins is None for non-SMAC envs.
+    Returns (returns, wins, ckpt_step).
     """
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
     os.environ["JAX_PLATFORMS"] = "cpu"
@@ -42,8 +42,6 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
     from model import FlaxMAMuZeroNet
     from mcts import MCTSJointOSLAPlanner
     from envs import make_vec_env_wrapper
-
-    is_smac = not config.train.env_name.startswith("MPE_")
 
     # Load checkpoint.
     ckpt_dir = Path(config.train.checkpoint_dir).absolute()
@@ -96,7 +94,7 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
     )
 
     returns = []
-    wins = [] if is_smac else None
+    wins = []
     episodes_done = 0
 
     while episodes_done < num_episodes:
@@ -119,10 +117,9 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
             dones_np = np.array(dones)
 
             episode_returns += rewards_np * active
-            if is_smac:
-                won_np = np.array(step_result[4])
-                # won_episode is only meaningful when the episode ends
-                episode_won |= (won_np & dones_np & active)
+            won_np = np.array(step_result[4])
+            # won_episode is only meaningful when the episode ends
+            episode_won |= (won_np & dones_np & active)
 
             active &= ~dones_np
             observations = next_obs
@@ -132,8 +129,7 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
                 break
 
         returns.extend(episode_returns.tolist())
-        if is_smac:
-            wins.extend(episode_won.tolist())
+        wins.extend(episode_won.tolist())
         episodes_done += B
 
     return returns, wins, step
@@ -176,9 +172,8 @@ def main(cfg: DictConfig):
         f"Min  return:      {returns.min():.3f}\n"
         f"Max  return:      {returns.max():.3f}\n"
     )
-    if wins is not None:
-        win_rate = np.mean(wins)
-        msg += f"Win rate:         {win_rate:.1%}  ({int(np.sum(wins))}/{len(wins)})\n"
+    win_rate = np.mean(wins)
+    msg += f"Win rate:         {win_rate:.1%}  ({int(np.sum(wins))}/{len(wins)})\n"
     msg += f"Elapsed:          {elapsed:.1f}s"
     logger.info(msg)
 

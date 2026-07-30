@@ -8,7 +8,7 @@ from jaxmarl.environments.smax import map_name_to_scenario
 class SMAXEnvWrapper:
     """Single-environment SMAX wrapper. Allies vs scripted enemies (HeuristicEnemySMAX).
 
-    Interface mirrors MPEEnvWrapper:
+    Interface:
       reset(rng_key)            -> (obs: np.ndarray shape (1, N, obs_size), state)
       step(rng_key, state, acts) -> (obs, state, team_reward: float, done: bool)
       observation_size: int
@@ -54,7 +54,7 @@ class SMAXEnvWrapper:
 class VecSMAXEnvWrapper:
     """Vectorized SMAX wrapper using jax.vmap over num_envs parallel environments.
 
-    Interface mirrors VecMPEEnvWrapper:
+    Interface:
       reset(rng_keys)                   -> (obs: (B, N, obs_size), states)
       step(rng_keys, states, actions)   -> (obs, states, rewards: (B,), dones: (B,))
     """
