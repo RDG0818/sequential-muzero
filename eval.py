@@ -62,7 +62,15 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
         "opt_state": opt_state,
         "step": np.array(0),
     }
-    restored = ckpt_manager.restore(latest, args=ocp.args.StandardRestore(target))
+    try:
+        restored = ckpt_manager.restore(latest, args=ocp.args.StandardRestore(target))
+    except ValueError as e:
+        raise ValueError(
+            f"Checkpoint at {ckpt_dir} (step {latest}) doesn't match the current "
+            f"model/mcts config — the network shapes differ. Pass the same "
+            f"model=/mcts= overrides eval.py was trained with, e.g. "
+            f"`python eval.py model=smax mcts=joint`. Original error: {e}"
+        ) from e
     params = restored["params"]
     step = int(restored["step"])
 
@@ -129,7 +137,7 @@ def _build_config(cfg: DictConfig) -> ExperimentConfig:
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig):
-    num_episodes = cfg.get("eval_episodes", 100)
+    num_episodes = cfg.eval_episodes
     config = _build_config(cfg)
 
     ray.init(ignore_reinit_error=True)

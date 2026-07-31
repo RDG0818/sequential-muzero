@@ -4,6 +4,8 @@ defaults:
   - train: default
   - _self_
 
+eval_episodes: 100  # eval.py: number of episodes to evaluate a checkpoint over
+
 hydra:
   job:
     chdir: false
