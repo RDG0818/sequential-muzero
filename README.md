@@ -10,9 +10,7 @@ Throughput comparison against the original MAZero (PyTorch, Cython MCTS, SMAC) i
 
 ## Results
 
-SMAX 3m, 3 allies vs 3 scripted marines (JaxMARL `HeuristicEnemySMAX`), trained on a borrowed RTX 5070 Ti. Evaluated with `python eval.py model=smax mcts=joint eval_episodes=200`.
-
-The first run used a constant learning rate (the paper's default) and plateaued around episode 14k to 20k. Dropped `end_lr_factor` to 0.1 (commit `34f333d`) to fix it.
+SMAX 3m trained on a RTX 5070 Ti with a i9-14900K. 
 
 | Checkpoint | Mean return | Win rate | wandb |
 |---|---|---|---|
@@ -39,7 +37,7 @@ Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud
 ## Usage
 
 ```bash
-# SMAX 3m (default)
+# SMAX 3m 
 python train.py model=smax mcts=joint
 
 # Override hyperparameters
@@ -52,7 +50,7 @@ python eval.py model=smax mcts=joint eval_episodes=200
 pytest tests/ -v
 ```
 
-All hyperparameters live in `configs/`. No code changes needed for overrides.
+All hyperparameters live in `configs/`. 
 
 ## Relevant Papers
 
