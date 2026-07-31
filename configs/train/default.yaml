@@ -22,7 +22,7 @@ replay_buffer_beta_frames: 100000
 batch_size: 256
 learning_rate: 5e-4      # paper uses 5e-4 constant
 param_update_interval: 100
-end_lr_factor: 1.0       # no decay (1.0 = constant LR)
+end_lr_factor: 0.1       # 10x LR drop by decay_steps; paper's constant LR plateaued (flat loss ep~14k-20k, step 180k-250k on SMAX 3m run 2026-07-31)
 lr_warmup_steps: 0       # no warmup; paper uses constant LR
 value_scale: 0.25
 consistency_scale: 1.0
