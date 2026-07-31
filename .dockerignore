@@ -1,0 +1,12 @@
+.git
+.worktrees/
+.claude/
+.superpowers/
+docs/superpowers/
+__pycache__/
+*.pyc
+.pytest_cache/
+checkpoints/
+checkpoints_symlog/
+wandb/
+*.log

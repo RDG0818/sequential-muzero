@@ -35,7 +35,17 @@ Contact: rdg291@msstate.edu
 ```bash
 conda create -n mazero python=3.10.18 && conda activate mazero
 pip install -r requirements.txt
+pip install --upgrade "jax[cuda12]"  # requirements.txt installs CPU jax; this swaps in the GPU build
 ```
+
+### Docker (GPU)
+
+```bash
+docker build -t sequential-muzero:gpu .
+docker run --gpus all sequential-muzero:gpu model=smax mcts=joint
+```
+
+Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. Default `CMD` runs the SMAX 3m preset; override by appending Hydra args as shown above.
 
 ## Usage
 
