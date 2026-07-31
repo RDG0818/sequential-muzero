@@ -8,7 +8,7 @@ Usage:
   python eval.py                                       # default config + latest checkpoint
   python eval.py train.checkpoint_dir=runs/myrun       # specific run directory
   python eval.py eval_episodes=200                     # more episodes for tighter estimate
-  python eval.py train.num_simulations=100             # more MCTS sims for eval
+  python eval.py mcts.num_simulations=100              # more MCTS sims for eval
   python eval.py 'train.env_name="3m"' train.num_agents=3 train.max_episode_steps=150
 """
 
@@ -22,6 +22,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from config import ExperimentConfig, ModelConfig, MCTSConfig, TrainConfig
 from utils.logging_utils import logger
+from utils.transforms import get_value_transform_fns
 
 
 @ray.remote
@@ -128,11 +129,17 @@ def _run_eval(obs_size: int, action_size: int, config: ExperimentConfig, num_epi
 
 
 def _build_config(cfg: DictConfig) -> ExperimentConfig:
-    return ExperimentConfig(
+    config = ExperimentConfig(
         model=ModelConfig(**OmegaConf.to_container(cfg.model, resolve=True)),
         mcts=MCTSConfig(**OmegaConf.to_container(cfg.mcts, resolve=True)),
         train=TrainConfig(**OmegaConf.to_container(cfg.train, resolve=True)),
     )
+    get_value_transform_fns(config.model.value_transform)  # raises early if unknown
+    if not 0.0 <= config.model.unimix_ratio < 1.0:
+        raise ValueError(
+            f"unimix_ratio must be in [0.0, 1.0), got {config.model.unimix_ratio}"
+        )
+    return config
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
