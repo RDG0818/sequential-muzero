@@ -20,6 +20,15 @@ Contact: rdg291@msstate.edu
 2. **Async actor-learner pipeline** — self-driving learner loop, async param sync, prioritized replay buffer
 3. **Parallelism** — vectorized environments across multiple CPU actors
 
+## Results
+
+SMAX 3m (3 allies vs 3 scripted marines, JaxMARL `HeuristicEnemySMAX`), trained on a borrowed RTX 5070 Ti. Evaluated with `python eval.py model=smax mcts=joint eval_episodes=200`:
+
+| Checkpoint | Mean return | Win rate | wandb |
+|---|---|---|---|
+| step 250,000 (constant LR — [paper default](configs/train/default.yaml), plateaued ep~14k-20k) | 1.44 ± 0.62 | 54.0% (54/100) | [run](https://wandb.ai/ryangoodwin0818-mississippi-state-university/myzero1/runs/53o5s8iw) |
+| step _______ (LR decay fix, `end_lr_factor=0.1`, commit `34f333d`) | _______ | _______ | _______ |
+
 ## Implementation Highlights
 
 **Async actor-learner** (Ray): `LearnerActor` runs N training steps per Ray call to amortize ~100ms scheduling overhead. Parameter syncs are fired at episode end and resolved at episode start, overlapping the ~300ms transfer with MCTS compute. All GPU→CPU metrics pack into a single `jnp.concatenate` for one DMA transaction.
@@ -56,8 +65,8 @@ python train.py model=smax mcts=joint
 # Override hyperparameters
 python train.py train.batch_size=512 mcts.num_simulations=100
 
-# Evaluate
-python eval.py eval_episodes=200
+# Evaluate (model=/mcts= must match what the checkpoint was trained with)
+python eval.py model=smax mcts=joint eval_episodes=200
 
 # Tests
 pytest tests/ -v
