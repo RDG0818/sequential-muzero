@@ -1,185 +1,59 @@
-# Handoff: Second Portfolio Simplification Pass
+# Handoff
 
 ## Goal
 
-Cut unnecessary complexity and unused features from `sequential-muzero` (JAX/Flax
-multi-agent MuZero, SMAX 3m target) for portfolio purposes — this is a follow-up
-to an earlier "first simplification pass" (already merged prior to this session).
-User's framing: "go through and see if there is anything that can be cut that is
-adding unneeded complexities across the codebase."
+Turn `sequential-muzero` (JAX/Flax reimplementation of MAZero, multi-agent MuZero with OS(λ) MCTS for cooperative MARL) into a portfolio piece for ML infra/platform engineering roles. The original "sequential MCTS" research premise failed (never built, was worse than the joint planner when tried) and was abandoned — portfolio value is now the engineering/throughput story plus a real training result, not a novel research claim. Full scope lives in `docs/superpowers/specs/2026-07-30-portfolio-direction-design.md`: Phase 0 perf/readability check, Phase 1 DreamerV3-derived research bolt-on, Phase 2 real training run on a borrowed GPU, Phase 3 GPU Dockerfile, Phase 4 AWS IaC sketch (never deployed). User has about a week of active work budgeted; CI/lint explicitly deferred.
 
 ## Current state
 
-**Done and merged.** Branch `simplify/second-pass` was merged into `updates` at
-commit `2baa87b`. The worktree at `.worktrees/second-pass` and the branch itself
-have both been deleted (cleanup already ran). `updates` is the current branch in
-the main repo checkout, HEAD is `2baa87b`, working tree clean except two
-pre-existing untracked items unrelated to this work (`.claude/` dir, a stray
-`2405.11778v1.pdf`).
+All 5 phases of the spec are built. 125/125 tests green (`pytest tests/ -v`). `updates` branch is pushed to `origin/updates`, clean working tree, HEAD at `22ccf2c`.
 
-Full test suite passes: `conda run -n mazero pytest tests/ -v` → **105 passed**.
+- **Phase 1 (research bolt-on)**: `ModelConfig.value_transform` (`"hyperbolic"`|`"symlog"`) and `ModelConfig.unimix_ratio` in `config.py`, both config-flagged and default-off (byte-identical to prior behavior at defaults). Validated fast at driver startup in both `train/muzero.py:_build_config` and `eval.py:_build_config` (`get_value_transform_fns` raises on unknown name, `unimix_ratio` range-checked to `[0.0, 1.0)`). `utils/transforms.py` has `symlog`/`symexp`/`get_value_transform_fns`, docstrings trimmed to single-paragraph WHY statements.
+- **Phase 3 (Docker)**: `Dockerfile` (repo root) + `.dockerignore`. `nvidia/cuda:12.4.1-runtime-ubuntu22.04` base, two-step pip install (`requirements.txt` then `jax[cuda12]` upgrade — matches the exact install quirk hit on real hardware). Build-validated locally in a prior session (pip install completes, same jaxmarl/jax version warning the user saw on bare metal); GPU runtime (`docker run --gpus all`) still untested anywhere — no GPU in this sandbox, user hasn't run it on the training box yet either.
+- **Phase 4 (AWS IaC)**: `infra/aws/main.tf` + `infra/aws/bootstrap.sh.tpl` + `docs/deployment.md`. Deliberately a single-instance sketch (`g5.2xlarge`, whole Ray cluster on one box), not the GPU-node/CPU-node split the spec originally assumed — `terraform validate`/`fmt` clean. **Never `terraform apply`'d against a real AWS account** — that's the immediate next step, see Next Steps.
+- **Phase 2 (training run)**: real SMAX 3m run on a borrowed RTX 5070 Ti (16GB, i9-14900K, `num_actors=4`). First run plateaued (flat loss/return, episode ~14k-20k) under the paper's constant LR — root cause confirmed by reading `actors/loss.py:23-29`, the `warmup_cosine_decay_schedule`'s `end_value == peak_value` when `end_lr_factor=1.0`, so the "schedule" was mechanically flat. Fixed via `configs/train/default.yaml`: `end_lr_factor: 0.1` (commit `34f333d`). Eval at that plateaued checkpoint (step 250,000): mean return 1.44 ± 0.62, **win rate 54.0% (54/100)**, logged in README. User is currently re-running training with the LR fix in place (resumes from the step-250,000 checkpoint; since the resumed step counter already exceeds the schedule's `decay_steps`, the fix applies as an immediate LR drop to 5e-5, not a gradual anneal) — as of session end this run was still in progress and returns were still climbing on live observation, contradicting a first guess (from stale log data) that it had already plateaued for good. **Do not assume the plateau diagnosis is final** — trust what the user reports from the live run over the earlier log snapshot.
 
-LOC: real source (excluding `docs/superpowers/`, `build/`, `.so`, stray `.pdf`)
-went from **9124 → 5997 lines** (~34% cut), plus ~270k lines of committed
-C++/CUDA build artifacts (`build/`, the `.so`) removed from the tree.
-
-9 plan tasks landed as individual commits on top of the prior session's plan
-commit (`d611e5b`), then a final whole-branch review (opus) found 5 more issues,
-2 of which were fixed by a follow-up subagent and 2 by the controller directly,
-plus a scoped re-review confirming the fix. Full commit list, oldest→newest:
-
-```
-e82fad6 refactor: replace custom C++ replay buffer with cpprb
-1cc1a3f docs: update CLAUDE.md and README.md for cpprb replay buffer swap
-394694d refactor: drop mctx dependency, use a local RecurrentFnOutput NamedTuple
-8a84dae refactor: fold MCTSPlanner ABC into MCTSJointOSLAPlanner, drop planner_mode
-e359a04 refactor: drop MPE env wrapper and IPPO/MAPPO baselines, SMAX-only
-1188b82 refactor: delete the synchronous training loop
-47b2011 refactor: delete observation normalization
-5f8fa7b refactor: promote never-varied MCTS-math constants out of config
-83a759d refactor: rename num_gumbel_samples/max_depth_gumbel_search
-0b68406 refactor: extract shared make_optimizer, dedup eval.py vs learner_actor.py
-800b86a docs: fix stale AWPO description, dangling MPE/planner_mode/Gumbel refs
-2baa87b refactor: remove dead all_child_valid Q-data mask and orphaned locals
-```
-
-Key functional facts about the resulting code, for anyone picking this up:
-
-- `utils/replay_buffer.py` — `ReplayBuffer` is now `cpprb.PrioritizedReplayBuffer`-backed
-  only, no C++ extension, no Python fallback branch. `ReplayItem`/`Transition` no
-  longer carry `agent_order` or `all_child_valid` — all Q-data fields are required
-  (no `=None` defaults) and unconditionally populated by the sole planner.
-- `mcts/mcts_joint_osla.py` — `MCTSJointOSLAPlanner` is a standalone class (no
-  ABC base), owns all its own config extraction, defines its own
-  `RecurrentFnOutput` NamedTuple (no `mctx` import anywhere in the repo). Dropout
-  fix applied: `deterministic=True` on the `recurrent_inference` call site only
-  (the root `__call__` inference has no dropout and no such kwarg).
-- `mcts/osla_math.py` — `PB_C_BASE`, `PB_C_INIT`, `VALUE_DELTA_LB`,
-  `DIRICHLET_ALPHA`, `DIRICHLET_FRACTION` are now module constants, not
-  `MCTSConfig` fields (they were never varied in any shipped YAML).
-  `MCTSConfig` still keeps `mcts_rho`, `mcts_lambda`, `num_simulations`,
-  `num_sampled_actions` (renamed from `num_gumbel_samples`), `max_search_depth`
-  (renamed from `max_depth_gumbel_search`) as real tunables.
-- `actors/loss.py` — `make_optimizer(config)` factory (shared by
-  `learner_actor.py` and `eval.py`, fixes a latent warmup-clamp inconsistency).
-  AWPO in `make_train_step` is action-level only now — no more dead
-  `jnp.where(q_valid, ...)` CE-fallback branch when `awpo_alpha > 0`; the
-  `awpo_alpha == 0.0` plain-CE branch is untouched and still the correct path
-  when AWPO is disabled.
-- Repo is SMAX-only: `envs/mpe_env_wrapper.py`, `baselines/`, `train/ippo.py`,
-  `train/mappo.py`, `configs/baseline/` are gone. `configs/train/smax_3m.yaml`'s
-  contents were folded into `configs/train/default.yaml`, which is now the sole
-  train preset. Primary command is now `python train/muzero.py model=smax mcts=joint`.
-- `TrainConfig.sync` / `run_training_loop_sync` / `LearnerActor.train()` are gone
-  (async loop was the only path ever used).
-- `ModelConfig.use_obs_normalization` / `utils/obs_norm.py` / the `norm_state`
-  half of `get_params()` are gone — `get_params()` returns just `{"params": ...}`.
-- `CLAUDE.md` and `README.md` were updated incrementally per task, plus a final
-  pass fixing a stale AWPO description (was documenting the deleted state-level
-  formula) and a few dangling MPE/planner_mode/Gumbel-naming references.
+Two real pre-existing bugs were found and fixed via actual usage this session (not code review, the user hit both by running the commands):
+- `configs/config.yaml` never declared `eval_episodes` as a config key, so `python eval.py eval_episodes=200` failed under Hydra's strict-key mode (needed `+eval_episodes=200`). Fixed by declaring `eval_episodes: 100` in `configs/config.yaml`; `eval.py` now reads `cfg.eval_episodes` directly.
+- `eval.py`'s docstring showed `train.num_simulations=100` — wrong config group, `num_simulations` lives under `mcts=`, so that override was silently ignored. Fixed to `mcts.num_simulations=100`.
+- `eval.py` had its own duplicate `_build_config` with no range validation on `value_transform`/`unimix_ratio` (train path had it, eval path didn't — a previously "known parked gap" from an earlier review). Mirrored the same validation.
+- `.gitignore` only covered `checkpoints/`, not `checkpoints_symlog/` (the ablation run's output dir). Fixed with a `checkpoints_*/` pattern.
 
 ## Files in flight
 
-All changes are already committed and merged — nothing is uncommitted. For
-reference, files touched across the whole pass (see commit list above for which
-commit touched what):
-
-- `CLAUDE.md`, `README.md` — updated incrementally, then a final consistency pass
-- `config.py` — removed `planner_mode`, obs-norm, sync, and 5 MCTS-constant fields; renamed 2 fields
-- `configs/mcts/default.yaml`, `configs/mcts/joint.yaml` — same field removals/renames
-- `configs/mcts/smax.yaml` — deleted (byte-for-byte duplicate)
-- `configs/model/default.yaml`, `configs/model/smax.yaml` — obs-norm field removed / stale ref fixed
-- `configs/train/default.yaml` — folded `smax_3m.yaml` in, removed `sync: false`
-- `configs/train/smax_3m.yaml` — deleted (folded into `default.yaml`)
-- `configs/baseline/ippo.yaml`, `configs/baseline/mappo.yaml` — deleted
-- `mcts/base.py` — `MCTSPlanner` ABC removed, `MCTSPlanOutput` lost `agent_order`, gained required Q-fields
-- `mcts/mcts_joint_osla.py` — absorbed ABC logic, local `RecurrentFnOutput`, dropout fix, constant promotion
-- `mcts/osla_math.py` — gained 5 new module constants
-- `mcts/__init__.py` — no longer exports `MCTSPlanner`
-- `utils/replay_buffer.py` — full rewrite around cpprb, `agent_order`/`all_child_valid` removed
-- `utils/obs_norm.py` — deleted
-- `actors/data_actor.py`, `actors/reanalyze_actor.py` — planner_map collapsed, norm_state removed
-- `actors/replay_buffer_actor.py` — dead branches removed, `_q_valid` sidecar removed
-- `actors/loss.py` — gained `make_optimizer`, AWPO dead-branch cleanup, dead `K`/`N` locals removed
-- `actors/learner_actor.py` — sync method removed, obs-norm removed, uses shared `make_optimizer`
-- `eval.py` — `is_smac` branching removed, uses shared `make_optimizer`
-- `envs/__init__.py` — MPE routing removed, SMAX-only
-- `envs/mpe_env_wrapper.py` — deleted
-- `envs/smax_env_wrapper.py` — stale MPE-comparison docstrings fixed
-- `train/muzero.py` — unconditional `run_training_loop` call
-- `train/ippo.py`, `train/mappo.py` — deleted
-- `training/loop.py`, `training/__init__.py` — sync loop removed
-- `baselines/` (whole dir) — deleted
-- `csrc/`, `CMakeLists.txt`, `setup.py`, the compiled `.so`, `build/` (87 files) — deleted
-- `benchmarks/replay_buffer_benchmark.py` — deleted
-- `requirements.txt` — removed `mctx`, `pybind11`; added `cpprb`
-- `tests/test_mcts.py`, `tests/test_model.py`, `tests/test_replay_buffer.py` — updated for all of the above
+All committed and pushed, nothing uncommitted. This session's commits on top of the already-merged research-bolt-on/portfolio work:
+- `1c3f590` — trimmed verbose docstrings in `utils/transforms.py`
+- `78d628d` — added `Dockerfile` + `.dockerignore`, README Docker section + install fix
+- `2176b24` — added `infra/aws/main.tf`, `infra/aws/bootstrap.sh.tpl`, `docs/deployment.md`
+- `990c29d` — fixed `eval_episodes` Hydra strict-key bug, added clear error on checkpoint/config shape mismatch in `eval.py`
+- `34f333d` — `configs/train/default.yaml`: `end_lr_factor` 1.0 → 0.1, to break the observed LR plateau
+- `ad07f96` — fixed `eval.py` docstring typo (`train.num_simulations` → `mcts.num_simulations`), added validation to `eval.py`'s duplicate `_build_config`, `.gitignore` fix
+- `adf4986` — README Results section with baseline eval numbers (blank row for the LR-fix rerun)
+- `0365aac` — trimmed README to portfolio-facing content only (removed stale MAZero comparison table, removed Implementation Highlights section, cut em dashes/heavy bold)
+- `22ccf2c` — user's own further manual README trim (not authored by me this session — don't revert; current README is the source of truth for its content/tone)
 
 ## What changed
 
-(No uncommitted changes remain — everything above is already committed and merged. See commit list in "Current state" for the exact sequence.)
+See commit list above. In short: shipped Phases 3 and 4 of the spec (Docker, AWS sketch), ran the real Phase 2 training + eval, diagnosed and fixed a genuine LR-schedule bug found from the training curve, found and fixed 4 small pre-existing bugs in `eval.py`/config surfaced by the user actually running the commands, and rewrote the README twice (once by me per explicit "de-AI, remove implementation details, remove stale table" instructions, once more by the user directly).
 
 ## Failed attempts
 
-- **Running the plan's mandated GPU training smoke test** (`train/muzero.py
-  train.num_episodes=300 ...`) — could not run in this sandbox. `nvidia-smi` is
-  not present and `jax.devices()` only shows `CpuDevice`; `LearnerActor` is
-  hard-decorated `@ray.remote(num_gpus=1)`, so Ray can never schedule it here
-  and `DataActor`s hang forever waiting on `get_params()`. This is an
-  environment limitation, not a code bug — confirmed by checking for GPU
-  hardware directly, not by trial and error on the training script.
-  **Workaround used instead:** wrote a standalone CPU-only script
-  (`/tmp/.../scratchpad/smoke_cpprb.py`, not committed, scratch only) that
-  drives the real MCTS planner + real SMAX env + `process_episode()` +
-  the real cpprb-backed `ReplayBufferActor` end-to-end (add/sample/
-  update_priorities/sample_for_reanalysis/update_root_q) — this covers
-  everything except the GPU-only `LearnerActor` training step itself, and it
-  passed. **If you have GPU access, the actual smoke test
-  (`python train/muzero.py train.num_episodes=300 train.warmup_episodes=20
-  train.checkpoint_dir=/tmp/smoke_ckpt`) should still be run once** since the
-  full learner-in-the-loop path was never exercised in this session.
-- **Trusting the design plan's stated rationale for keeping `all_child_valid`**
-  — the plan (written earlier this session, before implementation) explicitly
-  chose to keep this Q-data validity mask on the stated grounds that it "masks
-  cold ring-buffer slots." This was flagged in the plan's own Self-Review Notes
-  as a conservative choice made under uncertainty. The final whole-branch
-  reviewer (opus) empirically disproved the rationale: the ring-buffer write
-  pointer and cpprb's sample() always move in lockstep from 0, so a "cold slot"
-  can never be sampled — the mask was always `True`, and removing it was safe.
-  Fixed in commit `2baa87b`. Lesson: a "keep it, we're not sure" note in a plan
-  should be revisited with fresh empirical verification at final review time,
-  not treated as permanently settled.
+- **Assuming the Phase 4 IaC sketch could split GPU-node/CPU-node** (per the original spec text): disproven by Phase 0's own profiling log — `DataActor` and `ReanalyzeActor` both print `Using GPU: cuda:0`, they call `model.recurrent_inference` during MCTS on GPU too, not just the learner. A CPU-only worker node would silently break those actors. Caught this before building (not after), asked the user, built a single-instance sketch instead and documented the real limitation in `docs/deployment.md` as a future extension requiring a CPU-JAX-backend code change first.
+- **`num_actors=6` on the borrowed RTX 5070 Ti (16GB)**: OOM'd during the real Phase 2 baseline run (worked fine during the shorter Phase 0 profiling run at the same actor count — likely accumulates over a long run). Every actor preallocates GPU memory via JAX per-process, so actor count is VRAM-bound on this box, not CPU-core-bound like the 3060 Ti box `CLAUDE.md` describes. User settled on `num_actors=4`.
+- **First diagnosis of the loss/return plateau as terminal**: read a training log window (episode ~14k-20k, step 180k-250k) showing flat loss/oscillating return and concluded the run had converged and needed the LR fix to make further progress. The user later reported the *next* continuation (still on the old constant-LR config, run before the fix was even written) was still climbing gradually on live observation — meaning the "plateau" in that specific window may have just been noise, not true convergence. I updated my stance rather than defending the original read. **Net effect: the LR fix is still a real, justified change (the math confirms the schedule was genuinely flat, not a schedule bug misdiagnosis), but its necessity for unblocking further improvement is not proven — the old constant-LR schedule may have continued improving on its own given enough episodes.**
 
 ## Known issues / blockers
 
-None outstanding in the code. One thing worth flagging to whoever trains next:
-
-- **The full GPU training loop was never actually run end-to-end this
-  session** (see "Failed attempts" above) — only a CPU-only substitute that
-  covers the replay-buffer/MCTS/env pipeline but not `LearnerActor`'s
-  `_train_step`. Recommend running the real smoke test
-  (`python train/muzero.py train.num_episodes=300 train.warmup_episodes=20
-  train.checkpoint_dir=/tmp/smoke_ckpt`) on the actual WSL2/GPU machine before
-  trusting this branch for a real training run, even though all 105 unit tests
-  pass on CPU.
-- A stray worktree at `.worktrees/simplify` (branch `refactor/simplify`,
-  commit `3efdf4a`) exists in the repo and was left untouched this session —
-  it predates this work and wasn't investigated; not part of this handoff's
-  scope but worth asking the user about if it's stale.
+- **Phase 2 LR-fix rerun result unknown.** User was actively running it as of session end; no log or eval output for it has been shared yet. The README's Results table has a blank row waiting on this (`step _______, LR decay fix`).
+- **Docker GPU runtime never verified on real hardware.** Build was validated in a prior session (pip install completes) but `docker run --gpus all` has never actually been run, here or on the user's box.
+- **AWS Terraform sketch never applied.** `terraform validate`/`fmt` clean, but the actual `apply` → verify → `destroy` cycle has not been run. This was the explicit next step the user asked for going into this session's final stretch.
+- **MAZero comparison benchmark is stale/removed.** The old README table (MAZero vs this repo throughput, pre-cpprb-swap numbers) was deliberately removed at the user's request. They plan to set up the original MAZero repo on the same borrowed 5070 Ti box later and re-run a real comparison themselves — not scheduled, no commands prepared for it yet.
+- **Ablation run (symlog/unimix) not yet run.** User agreed to run it but it hadn't started as of session end. Command: `python train.py model=smax mcts=joint train.wandb_mode=online model.value_transform=symlog model.unimix_ratio=0.01 train.checkpoint_dir=checkpoints_symlog`.
 
 ## Next steps
 
-1. **Run the real GPU smoke test** on the target WSL2 machine:
-   `conda run -n mazero python train/muzero.py train.num_episodes=300 train.warmup_episodes=20 train.checkpoint_dir=/tmp/smoke_ckpt`
-   — confirm it completes without error and produces a checkpoint. This is the
-   one verification step this session couldn't do (no GPU in this sandbox).
-2. If that passes, consider whether to `git push` the merged `updates` branch
-   to `origin/updates` (not done this session — merge was local only, per the
-   user's "Merge to updates locally" choice).
-3. Ask the user about the stray `.worktrees/simplify` (`refactor/simplify`
-   branch) — unclear if it's abandoned work or something still in progress.
-4. If more simplification passes are wanted, `CLAUDE.md`'s "Future Improvements"
-   section still lists several `[medium]`/`[research]` items (recurrent
-   dynamics, data augmentation, sequential MCTS, factored policy targets) that
-   were explicitly out of scope for both simplification passes — those are
-   feature ideas, not cleanup, so a different kind of session.
+1. **Get the LR-fix rerun result from the user** (log + `python eval.py model=smax mcts=joint eval_episodes=200` output) and fill in the blank row of README's Results table.
+2. **Docker GPU smoke test on the user's box**: `docker build -t sequential-muzero:gpu .` then `docker run --gpus all sequential-muzero:gpu model=smax mcts=joint` — confirm it actually trains, not just that the image builds.
+3. **AWS apply/verify/destroy cycle** — user wants to do this for real but briefly/cheaply. Runbook already given to the user in-conversation (not yet written to a file): `terraform init`, `terraform apply -var="key_name=..." -var="ssh_cidr=$(curl -s ifconfig.me)/32"` from `infra/aws/`, wait ~5-10 min for the bootstrap script's git clone + docker build, verify via `curl -I http://<ip>:8265` (Ray dashboard) and `ssh ... "docker ps"`, then `terraform destroy` immediately to stop billing (~$0.30-0.40 for a 15-20 min test on `g5.2xlarge`).
+4. Once the ablation run (symlog/unimix) is done, decide whether it's worth a second row in the Results table or a separate note.
+5. Deferred to a future revisit (not this week): entity-attention/variable-action-space architecture work needed for true multi-scenario generalist training (confirmed via `envs/smax_env_wrapper.py` that action/obs sizes vary per SMAX scenario, so this needs a real architecture change, not a config flag), an episode replay visualizer, additional SMAX scenarios (8m, 2s3z, 3s5z), and the real MAZero comparison benchmark.

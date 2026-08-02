@@ -14,8 +14,10 @@ SMAX 3m trained on a RTX 5070 Ti with a i9-14900K.
 
 | Checkpoint | Mean return | Win rate | wandb |
 |---|---|---|---|
-| step 250,000, constant LR | 1.44 ± 0.62 | 54.0% (54/100) | [run](https://wandb.ai/ryangoodwin0818-mississippi-state-university/myzero1/runs/53o5s8iw) |
+| step 530,000, constant LR | 1.74 ± 0.49 | 78.0% (78/100) | [run](https://wandb.ai/ryangoodwin0818-mississippi-state-university/myzero1/runs/53o5s8iw) |
 | step _______, LR decay fix | _______ | _______ | _______ |
+
+Training still in progress at step 530,000, still on the original constant-LR schedule (win rate climbed 54%→78% from step 250,000 to 530,000, so this had not plateaued).
 
 ## Installation
 
